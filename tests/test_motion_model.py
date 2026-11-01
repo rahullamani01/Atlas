@@ -81,3 +81,80 @@ def test_velocity_is_clipped():
 def test_unknown_method_raises():
     with pytest.raises(ValueError):
         DifferentialDriveRobot().step(1, 0, 0.1, "magic")
+
+
+# ---- forward kinematics from wheel velocities ----
+
+def test_equal_wheel_speeds_drive_straight():
+    r = DifferentialDriveRobot(pose=Pose(0, 0, 0))
+    # v = r * omega = 0.05 * 10 = 0.5 m/s for 2 s -> 1 m along +x
+    for _ in range(100):
+        r.step_wheels(10.0, 10.0, 0.02, "exact")
+    assert r.pose.x == pytest.approx(1.0)
+    assert r.pose.y == pytest.approx(0.0, abs=1e-9)
+    assert r.pose.theta == pytest.approx(0.0, abs=1e-9)
+
+
+def test_opposite_wheel_speeds_spin_in_place():
+    r = DifferentialDriveRobot(pose=Pose(4, 4, 0))
+    for _ in range(100):
+        r.step_wheels(-5.0, 5.0, 0.01, "exact")
+    assert (r.pose.x, r.pose.y) == (4, 4)
+    # omega = r(wr - wl) / L = 0.05 * 10 / 0.30
+    assert r.pose.theta == pytest.approx(0.05 * 10 / 0.30)
+
+
+def test_wheel_step_matches_equivalent_twist_step():
+    a = DifferentialDriveRobot(pose=Pose(1, 2, 0.3))
+    b = DifferentialDriveRobot(pose=Pose(1, 2, 0.3))
+    v, w = a.wheel_speeds_to_twist(4.0, 7.0)
+    for _ in range(50):
+        a.step_wheels(4.0, 7.0, 0.02, "midpoint")
+        b.step(v, w, 0.02, "midpoint")
+    assert (a.pose.x, a.pose.y, a.pose.theta) == pytest.approx(
+        (b.pose.x, b.pose.y, b.pose.theta)
+    )
+
+
+def test_inverse_kinematics_of_pure_forward_motion():
+    r = DifferentialDriveRobot(wheel_radius=0.1, wheel_separation=0.5)
+    omega_l, omega_r = r.twist_to_wheel_speeds(0.3, 0.0)
+    assert omega_l == pytest.approx(3.0)
+    assert omega_r == pytest.approx(3.0)
+
+
+def test_positive_angular_velocity_turns_left():
+    r = DifferentialDriveRobot(pose=Pose(0, 0, 0))
+    r.step_wheels(5.0, 8.0, 0.1, "exact")  # right wheel faster -> CCW
+    assert r.pose.theta > 0
+    assert r.pose.y > 0
+
+
+def test_simulator_can_be_driven_by_wheel_speeds():
+    from atlas.simulation.simulator import Simulator
+    from atlas.simulation.world import World
+
+    robot = DifferentialDriveRobot(pose=Pose(1, 1, 0))
+    sim = Simulator(World(10, 10), robot, dt=0.1, method="exact")
+    for _ in range(10):
+        assert sim.step_wheels(10.0, 10.0)
+    # v = 0.05 * 10 = 0.5 m/s for 1 s
+    assert robot.pose.x == pytest.approx(1.5)
+    assert sim.trajectory()[-1, 0] == pytest.approx(1.0)
+
+
+# ---- parameter validation ----
+
+def test_zero_wheel_radius_is_rejected():
+    with pytest.raises(ValueError, match="wheel_radius"):
+        DifferentialDriveRobot(wheel_radius=0.0)
+
+
+def test_zero_wheel_separation_is_rejected():
+    with pytest.raises(ValueError, match="wheel_separation"):
+        DifferentialDriveRobot(wheel_separation=0.0)
+
+
+def test_negative_body_radius_is_rejected():
+    with pytest.raises(ValueError, match="body_radius"):
+        DifferentialDriveRobot(body_radius=-0.1)

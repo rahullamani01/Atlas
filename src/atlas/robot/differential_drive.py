@@ -23,6 +23,16 @@ class DifferentialDriveRobot:
     max_angular_speed: float = 2.0   # [rad/s]
     pose: Pose = field(default_factory=Pose)
 
+    def __post_init__(self) -> None:
+        if self.wheel_radius <= 0:
+            raise ValueError("wheel_radius must be positive")
+        if self.wheel_separation <= 0:
+            raise ValueError("wheel_separation must be positive")
+        if self.body_radius < 0:
+            raise ValueError("body_radius must be non-negative")
+        if self.max_linear_speed < 0 or self.max_angular_speed < 0:
+            raise ValueError("speed limits must be non-negative")
+
     # ---- wheel <-> body velocity conversions ----
     def wheel_speeds_to_twist(self, omega_l: float, omega_r: float) -> tuple[float, float]:
         """v = r(wR + wL)/2,  omega = r(wR - wL)/L"""
@@ -68,3 +78,14 @@ class DifferentialDriveRobot:
             raise ValueError(f"unknown method: {method}")
 
         p.theta = wrap_angle(p.theta + w * dt)
+
+    def step_wheels(self, omega_l: float, omega_r: float, dt: float,
+                    method: str = "midpoint") -> None:
+        """Advance the pose by dt seconds given wheel angular velocities [rad/s].
+
+        This is the forward-kinematics entry point: each wheel speed is mapped to
+        a body twist, then integrated with `step`. Positive wheel speeds drive
+        the robot forward; omega_r > omega_l turns counter-clockwise.
+        """
+        v, w = self.wheel_speeds_to_twist(omega_l, omega_r)
+        self.step(v, w, dt, method)

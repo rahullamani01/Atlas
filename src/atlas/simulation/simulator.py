@@ -38,6 +38,11 @@ class Simulator:
         self._trajectory.append((self.time, p.x, p.y, p.theta))
         return ok
 
+    def step_wheels(self, omega_l: float, omega_r: float) -> bool:
+        """Advance one time step from wheel angular velocities [rad/s]."""
+        v, w = self.robot.wheel_speeds_to_twist(omega_l, omega_r)
+        return self.step(v, w)
+
     def trajectory(self) -> np.ndarray:
         """Array of shape (N, 4): columns are time, x, y, theta."""
         return np.array(self._trajectory)
