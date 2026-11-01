@@ -209,3 +209,102 @@ wheel level.
 4. The floor is planar and the wheels stay in contact.
 5. Pose integration is deterministic and noise-free — uncertainty is added in
    Phase 5 (localization), not here.
+
+## 11. Occupancy grids and graph search (Phase 2)
+
+### 11.1 Rasterisation
+
+A grid with resolution `s`, origin `(o_x, o_y)` and `W × H` cells maps between
+world and discrete coordinates as
+
+```text
+col = floor((x - o_x) / s)          x_centre = o_x + (col + 0.5) s
+row = floor((y - o_y) / s)          y_centre = o_y + (row + 0.5) s
+```
+
+A cell is blocked when its centre lies inside an obstacle. Storing occupancy
+as `blocked[row, col]` keeps array indexing `(row, col)` separate from world
+`(x, y)`, so the two conventions cannot silently swap.
+
+### 11.2 Inflation for robot size
+
+Planning on a point robot would produce paths that scrape walls. Instead, every
+blocked cell is grown by the robot body radius before searching. If a cell
+centre is within
+
+```text
+r_inflate + s/2
+```
+
+of a blocked cell centre, it becomes blocked. The extra half-cell makes the
+result conservative by at most one cell diagonal, so the returned path keeps at
+least the body radius of clearance. The cost is that narrow gaps smaller than
+the robot are correctly reported as impassable rather than producing an
+optimistic path.
+
+### 11.3 Graph formulation
+
+- **Nodes:** free cells.
+- **Edges:** 4- or 8-neighbourhood of free cells.
+- **Costs:** `1` for orthogonal moves, `√2` for diagonal moves.
+
+With 8-connectivity, a diagonal move between `(c, r)` and `(c±1, r±1)` is only
+allowed when both adjacent orthogonal cells are free. Without that rule a path
+can cut through the corner between two obstacles, which a circular body cannot
+do. The check is skipped only when explicitly requested.
+
+### 11.4 Dijkstra
+
+Dijkstra expands nodes in increasing order of the exact cost from the start:
+
+```text
+g(n) = cost of the cheapest known path from start to n
+```
+
+It is optimal for non-negative edge costs and explores in all directions until
+the goal is popped, so it is the reference implementation.
+
+### 11.5 A*
+
+A* orders the open set by
+
+```text
+f(n) = g(n) + h(n)
+```
+
+where `h(n)` estimates the remaining cost to the goal. With an admissible
+heuristic (`h(n) ≤ true remaining cost`) and a consistent one
+(`h(n) ≤ c(n, m) + h(m)`), the first time the goal is expanded its cost is
+optimal.
+
+Heuristics on a uniform grid (`dx = |Δcol|`, `dy = |Δrow|`):
+
+```text
+h_manhattan = dx + dy                          # admissible for 4-connectivity
+h_euclidean = sqrt(dx² + dy²)                  # admissible, weaker
+h_octile    = (dx + dy) + (√2 - 2) min(dx, dy)  # exact for 8-connectivity
+```
+
+Manhattan overestimates diagonal travel, so `a_star` rejects it when
+`connectivity == 8`. Octile is exact, which is why A* with octile expands the
+smallest corridor of cells in the experiments.
+
+Equal `f` values are broken by lower `h`, which biases expansion toward the
+goal and reduces the number of expanded nodes without affecting optimality.
+
+### 11.6 Complexity
+
+With `N` free cells and a binary heap, both algorithms run in
+`O(N log N)` time and `O(N)` memory. The difference is practical: on the Phase 2
+demo map (80 × 80 cells, 90.4% free, 0.20 m inflation) both find the same
+29.02 m path, but Dijkstra expands 4,465 cells versus 1,074 for A* — a 76%
+reduction.
+
+### 11.7 Limitations
+
+1. The grid is static; replanning for moving obstacles belongs to Phase 6.
+2. Paths are sequences of cell centres, not smooth trajectories. Following
+   them with a controller is Phase 3.
+3. Occupancy is binary; probabilistic occupancy is a later extension.
+4. Rasterisation at cell centres can miss very thin obstacles smaller than one
+   cell. Inflating by at least half a cell mitigates this.
