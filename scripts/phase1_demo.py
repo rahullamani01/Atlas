@@ -10,7 +10,7 @@ from atlas.simulation.world import RectObstacle, World
 
 
 def circle_path(method, dt, v=0.5, w=0.5):
-    robot = DifferentialDriveRobot(pose=Pose(5.0, 3.0, 0.0))
+    robot = DifferentialDriveRobot(pose=Pose(1, 5, 0.0))
     total = 2 * math.pi / w
     n = round(total / dt)
     dt_eff = total / n
