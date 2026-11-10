@@ -78,6 +78,7 @@ class LidarScan:
     world_angles: np.ndarray    # world frame [rad]
     origin: tuple[float, float]
     max_range: float
+    body_origin: tuple[float, float] = (0.0, 0.0)
 
     @property
     def hit_mask(self) -> np.ndarray:
@@ -176,4 +177,5 @@ class Lidar:
             world_angles=world_angles,
             origin=(ox, oy),
             max_range=self.max_range,
+            body_origin=self.mount_offset,
         )
