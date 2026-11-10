@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
 **Date:** 10 November 2026
-**Branch:** `main` (clean, synced with `origin/main`)
-**Latest commit:** `0618959` Phase 2: add planning demo and documentation
-**Tests:** 73 passing (`pytest`)
+**Branch:** `main` (synced with `origin/main`)
+**Latest work:** Phase 3 — PID control and closed-loop path following
+**Tests:** 105 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -15,13 +15,15 @@
 | 0 | Geometry utilities, conventions, scaffold | complete |
 | 1 | Differential-drive kinematics and motion simulation | complete |
 | 2 | Occupancy grids, Dijkstra, A* path planning | complete |
-| 3 | Motion control and trajectory tracking | next |
+| 3 | PID control and closed-loop path following | complete |
+| 4 | LiDAR simulation and sensor uncertainty | next |
 
-The system can currently model a differential-drive robot, simulate its motion
-in a 2D world with obstacles, rasterise that world into an occupancy grid, and
-plan an optimal collision-free route between two cells.
+The system can model a differential-drive robot, simulate its motion in a 2D
+world with obstacles, rasterise that world into an occupancy grid, plan an
+optimal collision-free route, and drive the route with feedback control.
 
-It **cannot yet follow the route**. That is Phase 3.
+It **cannot yet perceive** the environment; the controller uses ground-truth
+pose and the known map. That is Phase 4-5.
 
 ---
 
@@ -62,16 +64,31 @@ It **cannot yet follow the route**. That is Phase 3.
 - `a_star(grid, start, goal, heuristic="octile", ...)`
 - Heuristics: `zero`, `manhattan` (4-connected only), `euclidean`, `octile`
 
+### Phase 3 — control (`src/atlas/control/`)
+- `PID(kp, ki, kd, output_limit, integral_limit)`
+  - `update(error, dt)`, `reset()`, `integral` property
+  - output clamp, integral clamp, conditional anti-windup, zero derivative on
+    the first sample
+- `PathFollower(lookahead=0.5, max_linear_speed=0.5, max_angular_speed=1.5,
+  goal_tolerance=0.1, distance_gain=0.8, min_speed=0.05, heading_pid=None)`
+  - `compute(pose, path, dt) -> Twist(v, w)`
+  - `lookahead_point(pose, path)`, `goal_reached`, `reset()`
+  - carrot chasing on world-space waypoints; PID heading control; turns in
+    place when the carrot is behind; stops within goal tolerance
+
 ### Experiments
 - `scripts/phase1_demo.py` — straight line, rotation, integrator error table,
   circle and collision plots.
 - `scripts/phase2_demo.py` — 80x80 inflated map, Dijkstra vs A*, saves
   `experiments/plots/phase2_planning.png`.
+- `scripts/phase3_demo.py` — plans the Phase 2 map, follows it with P-only and
+  PID heading control under a wheel bias, reports metrics, saves
+  `experiments/plots/phase3_tracking.png`.
 
 ### Documentation
 - `docs/mathematics.md` — pose conventions, forward/inverse kinematics,
   nonholonomic constraint, integrators, ICC, error measurements, occupancy
-  grids, inflation, graph search, heuristic admissibility.
+  grids, inflation, graph search, heuristic admissibility, PID and tracking.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -79,7 +96,7 @@ It **cannot yet follow the route**. That is Phase 3.
 
 ## 3. Verified numbers
 
-- 73 tests pass.
+- 105 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -89,6 +106,11 @@ It **cannot yet follow the route**. That is Phase 3.
   - Dijkstra expands 4,465 cells (~12 ms)
   - A* expands 1,074 cells (~6 ms), a **76% reduction**
   - A* with octile is optimal and matches Dijkstra's cost exactly
+- Phase 3 demo (29.17 m path, 20 Hz, 0.2 rad/s injected wheel bias):
+  - both controllers reach the goal with **zero collisions**
+  - P-only cross-track RMS `0.0513 m`, PID `0.0258 m` (50% reduction)
+  - final error `0.099 m` (P) and `0.098 m` (PID), inside the 0.1 m tolerance
+  - PID control effort `14.1 rad` vs P-only `14.5 rad`
 
 ---
 
@@ -115,6 +137,7 @@ source .venv/bin/activate
 pytest
 python scripts/phase1_demo.py
 python scripts/phase2_demo.py
+python scripts/phase3_demo.py
 ```
 
 Repository workflow used so far:
@@ -129,11 +152,12 @@ Repository workflow used so far:
 
 ## 6. Known limitations and gotchas
 
-1. **No path following yet.** A planned grid path is a list of cell centres;
-   nothing converts it into motion commands.
-2. **Grid paths cut visually close to corners.** Inflation gives 0.20 m
-   clearance plus a conservative half-cell, but a controller that cuts corners
-   with a long lookahead can still clip an inflated obstacle.
+1. **Control assumes perfect state.** The follower uses the simulator's true
+   pose. Localization error arrives in Phase 5 and will degrade tracking.
+2. **Grid paths cut visually close to corners.** Inflation gives clearance plus
+   a conservative half-cell; the Phase 3 demo adds a 0.05 m planning margin
+   because a lookahead controller cuts corners. Longer lookaheads need more
+   margin.
 3. **Collision is discrete.** `Simulator.step` checks only the post-step pose.
    At high speed the body can tunnel through a thin obstacle. Keep demo speeds
    at or below 0.5 m/s with `dt = 0.05` until swept collision is added.
@@ -141,16 +165,21 @@ Repository workflow used so far:
    mapping can request wheel speeds beyond any real actuator limit.
 5. **No wheel dynamics.** Wheel speeds are commands, not states; there is no
    acceleration limit or slip model yet.
-6. **Paths are dense.** The Phase 2 demo path has 103 waypoints for 29 m. A
-   controller can follow them directly, but nearest-point searches are linear
-   in waypoint count.
+6. **Paths are dense.** The Phase 2 demo path has ~103 waypoints for 29 m. The
+   follower does a linear nearest-point search each step, which is fine at this
+   scale but would need a spatial index in a much larger map.
 7. **No dynamic replanning.** The grid is static; that is Phase 6.
-8. **No metrics module.** Tracking metrics currently belong in the Phase 3
-   demo; a reusable `evaluation/` module arrives in Phase 7.
+8. **No metrics module.** Tracking metrics live in the Phase 3 demo; a
+   reusable `evaluation/` module arrives in Phase 7.
 
 ---
 
-## 7. Phase 3 — Motion control (next stage)
+## 7. Phase 3 — Motion control (completed)
+
+**Outcome:** `PID` and `PathFollower` are implemented and integrated with the
+simulator. On the Phase 2 map the robot reaches the goal with zero collisions,
+0.098 m final error and 0.026 m cross-track RMS under a 0.2 rad/s wheel bias.
+The plan below is kept as the record of how the phase was scoped.
 
 ### Goal
 Make the simulated robot follow the planned path using feedback, with
@@ -259,7 +288,7 @@ second strategy later; start with PID because the phase is about feedback.
 - Collision count (must be 0)
 - Control effort (sum of |omega| dt), useful for P vs PID comparison
 
-### Test plan (~18 tests)
+### Test plan (implemented: 32 tests)
 - PID proportional output equals `kp * error`.
 - Integral accumulates and eliminates steady-state error on a simple plant.
 - Derivative reacts to error rate and is zero for constant error.
@@ -275,8 +304,7 @@ second strategy later; start with PID because the phase is about feedback.
 - Lookahead advances to later waypoints as the robot moves.
 - Closed-loop test: Phase 2 demo map, start to goal, no collisions, final
   error < 0.15 m, cross-track RMS < 0.1 m.
-- P-only vs PID: PID has lower RMS heading error or lower settling time on the
-  same path.
+- P-only vs PID under wheel bias: PID has lower cross-track RMS.
 
 ### Demo
 `scripts/phase3_demo.py`:
@@ -285,18 +313,18 @@ second strategy later; start with PID because the phase is about feedback.
 3. Drive the robot with `PathFollower` through `Simulator` at `dt = 0.05`.
 4. Stop on goal tolerance, collision, or a step cap.
 5. Print metrics and save a plot of planned path, driven trajectory, and
-   cross-track/heading error over time.
+   cross-track error over time.
 6. Compare P-only and PID in the same run.
 
-### Acceptance criteria
-- All tests pass (target ~91 total).
+### Acceptance criteria (met)
+- All tests pass (105 total, 32 added for Phase 3).
 - Robot reaches the goal without collision on the demo map.
 - Final position error < 0.15 m.
 - Cross-track RMS < 0.1 m on the demo run.
 - Control commands always respect speed limits.
 - README, mathematics and design decisions updated to Phase 3.
 
-### Order of work
+### Order of work (completed)
 1. `pid.py` + `test_pid.py`.
 2. `path_follower.py` + unit tests for geometry/signs.
 3. Closed-loop integration test against the Phase 2 map.
@@ -306,8 +334,31 @@ second strategy later; start with PID because the phase is about feedback.
 
 ---
 
-## 8. Immediate next action
+## 8. Phase 4 — Sensor simulation (next stage)
 
-Start Phase 3 at `src/atlas/control/pid.py`, then build the follower. Keep the
-existing conventions and do not modify Phase 0-2 behaviour; the current suite is
-the regression baseline.
+**Goal:** replace perfect environmental knowledge with simulated range
+measurements, without yet estimating pose.
+
+Proposed scope:
+1. `src/atlas/sensors/lidar.py` — 2D LiDAR with configurable angular field of
+   view, angular resolution, max range and mounting offset.
+2. Ray casting against `RectObstacle` and world boundaries, returning
+   `(angle, range)` measurements; `inf` or `max_range` for no hit.
+3. Optional Gaussian range noise with a documented standard deviation.
+4. `tests/test_lidar.py` — known geometry (parallel wall, corner, behind the
+   robot, out of range), noise statistics, measurement count and angle
+   convention.
+5. `scripts/phase4_demo.py` — scan the Phase 2 world from several poses and plot
+   the rays and returns against ground truth.
+6. Docs: ray-rectangle intersection derivation, sensor conventions and limits.
+
+The Phase 3 follower still runs on ground-truth pose and the known path. Using
+LiDAR for obstacle avoidance and localization is Phase 5-6, not Phase 4.
+
+---
+
+## 9. Working agreement
+
+Keep the existing conventions and do not change Phase 0-3 behaviour; the
+current 105-test suite is the regression baseline. Commit implementation first,
+docs and demo second, then push.

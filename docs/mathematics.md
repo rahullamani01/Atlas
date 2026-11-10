@@ -308,3 +308,123 @@ reduction.
 3. Occupancy is binary; probabilistic occupancy is a later extension.
 4. Rasterisation at cell centres can miss very thin obstacles smaller than one
    cell. Inflating by at least half a cell mitigates this.
+
+## 12. Feedback control and path following (Phase 3)
+
+### 12.1 Tracking errors
+
+For pose `(x, y, θ)` and a path polyline, three errors matter:
+
+- **Distance to goal:** `d_goal = ||p_goal - p||`, used for stopping and speed.
+- **Cross-track error:** the minimum distance from the robot position to any
+  path segment (not merely the nearest waypoint). Measuring to waypoints alone
+  overstates the error by up to half a cell diagonal.
+- **Heading error:** for the nearest segment with direction `θ_path`,
+
+  ```text
+  ψ = wrap(θ_path - θ)
+  ```
+
+  so positive `ψ` means the path points to the robot's left.
+
+### 12.2 Discrete PID
+
+With error `e_k` and timestep `Δt`:
+
+```text
+I_k = clamp(I_{k-1} + e_k Δt,  ±I_max)
+D_k = (e_k - e_{k-1}) / Δt
+u_k = clamp(kp e_k + ki I_k + kd D_k, ±u_max)
+```
+
+The derivative is set to zero on the first sample to avoid a derivative kick
+from an undefined previous error.
+
+**Anti-windup.** While `|u_k| > u_max` and `e_k u_k > 0`, the stored integral
+is frozen at `I_{k-1}`. The saturated command is still applied, but the
+controller does not accumulate error it cannot act on. Without this, a long
+saturated stretch leaves a large integral that must be unwound before the
+output can reverse, causing overshoot.
+
+For a constant disturbance `w_b`, a P-only heading controller settles where
+`kp e = w_b`, leaving a steady offset. Integral action drives `e → 0` by
+supplying the bias through `I`.
+
+### 12.3 Carrot selection
+
+The follower finds the nearest waypoint, then walks forward along the polyline
+accumulating arc length until it reaches the lookahead distance `L_d`. If the
+lookahead falls inside a segment, the point is linearly interpolated:
+
+```text
+carrot = a + t (b - a),   t = remaining / ||b - a||
+```
+
+This keeps the target on the path instead of jumping between sparse waypoints.
+
+### 12.4 Control law
+
+Let `α` be the bearing to the carrot in the robot frame:
+
+```text
+α = wrap(atan2(carrot_y - y, carrot_x - x) - θ)
+ω = clamp(PID_heading(α), ±ω_max)
+```
+
+Linear speed slows with distance and is cut when the carrot is not ahead:
+
+```text
+if |α| >= π/2:   v = 0                    # rotate in place
+else:            v = clamp(max(k_d d_goal cos α, v_min), 0, v_max)
+```
+
+The robot stops and reports `goal_reached` when `d_goal ≤ tolerance`.
+
+Setting `v = 0` for `|α| ≥ π/2` prevents the robot from driving away from the
+path while turning around. The cosine term reduces speed during sharp turns,
+and `k_d d_goal` produces a smooth approach to the goal.
+
+### 12.5 Tuning and stability notes
+
+- At `Δt = 0.05 s` (20 Hz), `kp = 2` gives a responsive heading loop without
+  visible oscillation on the demo map.
+- `kd` damps heading-rate overshoot; it is sensitive to measurement noise, which
+  matters once noisy sensors arrive in Phase 4.
+- `ki` is small (`0.2`) because integral action only needs to remove slow bias;
+  larger values make corner transients worse.
+- Saturation is applied by both the PID and the follower, so commands never
+  exceed the robot limits.
+
+### 12.6 Measured result
+
+Phase 3 demo, 29.17 m planned path, 20 Hz, with a deliberately injected
+0.2 rad/s wheel bias (unmodelled yaw rate):
+
+| Metric | P-only (`kp=2`) | PID (`kp=2, ki=0.2, kd=0.05`) |
+|---|---:|---:|
+| Reached goal | yes | yes |
+| Collisions | 0 | 0 |
+| Time [s] | 58.8 | 58.6 |
+| Driven length [m] | 28.73 | 28.67 |
+| Final error [m] | 0.099 | 0.098 |
+| Cross-track RMS [m] | 0.0513 | **0.0258** |
+| Cross-track max [m] | 0.1174 | 0.1011 |
+| Heading RMS [deg] | 7.64 | 7.56 |
+| Control effort [rad] | 14.5 | 14.1 |
+
+Integral action halves the cross-track RMS under a constant bias, at slightly
+lower control effort. The bias is injected only for the experiment; the
+simulator itself has no wheel asymmetry yet.
+
+### 12.7 Limitations
+
+1. The controller is kinematic: it commands `(v, ω)` with no wheel dynamics,
+   acceleration limits or actuator delay.
+2. The path is followed as a polyline; there is no smoothing or time-optimal
+   trajectory generation.
+3. Obstacle avoidance beyond the planned path is not handled here. A moving
+   obstacle or a stale path needs Phase 6 replanning.
+4. The lookahead is fixed. Adaptive lookahead based on speed and curvature is a
+   natural improvement.
+5. Localization is assumed perfect. Phase 5 replaces the true pose with an
+   estimate, at which point controller noise sensitivity matters.

@@ -43,3 +43,27 @@
   cells that were expanded.
 - Path smoothing/trajectory generation is deliberately deferred to Phase 3;
   Phase 2 returns grid waypoints only.
+
+## Control (Phase 3)
+
+- PID derivative acts on the error signal directly (not on the measurement),
+  with zero derivative on the first sample to avoid a kick.
+- Anti-windup is conditional: integration freezes only while the output is
+  saturated and the error would push it deeper into saturation. The saturated
+  command is still returned.
+- The path follower is carrot chasing with PID heading control, not pure
+  pursuit curvature control. This keeps the phase focused on feedback and PID,
+  and avoids a second tuning problem. Pure pursuit remains a future option.
+- Default follower settings: lookahead 0.5 m, max speed 0.5 m/s, max yaw rate
+  1.5 rad/s, goal tolerance 0.1 m, distance gain 0.8, minimum speed 0.05 m/s.
+- When the carrot is behind the robot (|alpha| >= pi/2), linear speed is set to
+  zero and the robot turns in place. This prevents driving away from the path.
+- The follower consumes world-space waypoints. Grid paths are converted with
+  `grid.cell_to_world`; no planner types leak into the controller.
+- Paths are not smoothed in this phase. The demo plans with 0.25 m inflation
+  (0.20 m body plus a 0.05 m tracking margin) so corner cutting cannot clip
+  inflated obstacles.
+- The Phase 3 demo injects a constant 0.2 rad/s wheel bias to expose integral
+  action. This is an experiment-only disturbance, not a simulator feature.
+- Tracking metrics are computed in the experiment script. A reusable
+  `evaluation/` module is deferred to Phase 7.
