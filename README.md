@@ -105,3 +105,8 @@ if result.found:
 
 Full derivations, error analysis and assumptions are in
 [docs/mathematics.md](docs/mathematics.md).
+
+## Handoff
+
+Current project state, conventions, known limitations and the Phase 3 plan are
+in [docs/handoff.md](docs/handoff.md).
