@@ -2,8 +2,8 @@
 
 **Date:** 10 November 2026
 **Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 4 — LiDAR simulation and range uncertainty
-**Tests:** 125 passing (`pytest`)
+**Latest work:** Phase 5 — odometry and particle-filter localization
+**Tests:** 161 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -17,15 +17,18 @@
 | 2 | Occupancy grids, Dijkstra, A* path planning | complete |
 | 3 | PID control and closed-loop path following | complete |
 | 4 | LiDAR simulation and range uncertainty | complete |
-| 5 | Odometry and localization | next |
+| 5 | Odometry and particle-filter localization | complete |
+| 6 | Dynamic obstacles and recovery | next |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
-optimal collision-free route, drive the route with feedback control, and sense
-surrounding geometry with a simulated 2D LiDAR.
+optimal collision-free route, drive the route with feedback control, sense
+surrounding geometry with a simulated 2D LiDAR, and estimate its own pose by
+fusing wheel odometry with those scans.
 
-It **cannot yet estimate its own pose** from those measurements, and the
-controller still consumes ground truth. That is Phase 5.
+The controller now closes the loop on the **estimated** pose, not ground truth.
+It still assumes a static map and a known route, so detecting and driving around
+unexpected obstacles is Phase 6.
 
 ---
 
@@ -89,6 +92,29 @@ controller still consumes ground truth. That is Phase 5.
   - `points()` returns world-space hit points
   - a miss is exactly `max_range`, never `inf`/NaN
 - Seeded Gaussian range noise on finite hits, clipped to sensor range
+- `LidarScan.body_origin` records the mount offset used by the localization
+  measurement model
+
+### Phase 5 — localization (`src/atlas/`)
+- `Odometry(wheel_radius=0.05, wheel_separation=0.30, left_scale=1.0,
+  right_scale=1.0, pose=Pose())`
+  - `wheel_speeds_to_twist(omega_l, omega_r)`, `update_wheels`,
+    `update_twist`, `reset`
+  - exact constant-twist integration; per-wheel scale error models miscalibration
+- `DistanceField(distances, resolution, origin, include_boundary=True)`
+  - `from_grid(grid, include_boundary=True, boundary_only=False)`
+  - 8-connected chamfer transform in metres
+  - `distance_at(x, y)` and vectorised `sample(points)`
+  - analytic world-wall distance merged into lookups when `include_boundary`
+- `ParticleFilter(grid, n_particles=400, measurement_sigma=0.15,
+  max_distance=1.0, alpha_v=0.05, alpha_w=0.10, sigma_v=0.01, sigma_w=0.01,
+  max_beams=45, likelihood_scale=0.2, resample_position_noise=0.005,
+  resample_heading_noise=0.003, seed=None)`
+  - `initialize(pose, position_std, heading_std)`, `initialize_global`,
+    `predict(v, w, dt)`, `update(scan, resample=True)`, `step(...)`
+  - `resample()`, `estimate()`, `position_std()`, `effective_sample_size`
+  - noisy unicycle motion model; endpoint likelihood from the distance field;
+    systematic resampling below `ESS < N/2`; roughening jitter
 
 ### Experiments
 - `scripts/phase1_demo.py` — straight line, rotation, integrator error table,
@@ -100,12 +126,16 @@ controller still consumes ground truth. That is Phase 5.
   `experiments/plots/phase3_tracking.png`.
 - `scripts/phase4_demo.py` — 360 degree scans at four poses, clean vs noisy,
   saves `experiments/plots/phase4_lidar.png`.
+- `scripts/phase5_demo.py` — drives the Phase 3 route on the particle-filter
+  estimate under wheel-scale error, compares odometry and filter error, shows
+  offset-prior recovery, saves `experiments/plots/phase5_localization.png`.
 
 ### Documentation
 - `docs/mathematics.md` — pose conventions, forward/inverse kinematics,
   nonholonomic constraint, integrators, ICC, error measurements, occupancy
-  grids, inflation, graph search, heuristic admissibility, PID, tracking and
-  ray casting.
+  grids, inflation, graph search, heuristic admissibility, PID, tracking, ray
+  casting, odometry error, Bayes recursion, motion/measurement models,
+  likelihood fields, ESS and resampling.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -113,7 +143,7 @@ controller still consumes ground truth. That is Phase 5.
 
 ## 3. Verified numbers
 
-- 125 tests pass.
+- 161 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -133,6 +163,14 @@ controller still consumes ground truth. That is Phase 5.
   - measured noise RMS `0.028-0.030 m`, matching the configured sigma
   - minimum reported range `0.50 m` beside the long wall
   - rays correctly stop at obstacles and miss beyond 8 m
+- Phase 5 demo (29.17 m route, 20 Hz, 800 particles, 60 beams, `sigma = 0.02 m`,
+  wheel scales 0.99/1.01):
+  - odometry position RMS `11.395 m`, maximum `23.875 m`, final `23.875 m`
+  - particle-filter position RMS `0.085 m`, maximum `0.122 m`, final `0.080 m`
+  - heading RMS `0.19 deg` (filter) vs `64.87 deg` (odometry)
+  - goal reached, zero collisions, 58.9 s, 99% RMS reduction
+  - stationary recovery with a 1.1 m offset prior: passes from 0.45/0.22/0.07 m
+    to 0.41/0.12/0.08 m for prior std 0.3/0.5/0.8 m
 
 ---
 
@@ -147,7 +185,8 @@ controller still consumes ground truth. That is Phase 5.
 - Planning defaults to 8-connectivity, diagonal cost `sqrt(2)`, no corner
   cutting.
 - Search endpoints must be free; invalid input raises `ValueError`.
-- Pose from the simulator is ground truth (no noise until Phase 5).
+- `Pose` from the simulator is ground truth. `Odometry` and `ParticleFilter`
+  produce estimates and never read it.
 
 ---
 
@@ -161,6 +200,7 @@ python scripts/phase1_demo.py
 python scripts/phase2_demo.py
 python scripts/phase3_demo.py
 python scripts/phase4_demo.py
+python scripts/phase5_demo.py
 ```
 
 Repository workflow used so far:
@@ -175,9 +215,10 @@ Repository workflow used so far:
 
 ## 6. Known limitations and gotchas
 
-1. **Control assumes perfect state.** The follower uses the simulator's true
-   pose. LiDAR exists but is not fused into navigation, so localization error
-   (Phase 5) is not represented yet.
+1. **State estimation is local.** The filter tracks well from a known start but
+   cannot recover from an arbitrarily wrong prior; capture range is set by the
+   initial particle spread. Global relocalization and recovery behaviours are
+   Phase 6.
 2. **Grid paths cut visually close to corners.** Inflation gives clearance plus
    a conservative half-cell; the Phase 3 demo adds a 0.05 m planning margin
    because a lookahead controller cuts corners. Longer lookaheads need more
@@ -199,8 +240,14 @@ Repository workflow used so far:
    there is no beam width, intensity, multipath or mixed-pixel model.
 10. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
     is independent Gaussian rather than range-dependent with outliers.
-11. **Scans are uncalibrated and unused.** Nothing consumes `LidarScan` outside
-    the demo yet; mapping, localization and avoidance come later.
+11. **Scans are now fused into localization, but not into planning.** The filter
+    consumes `LidarScan`; the planner still uses a static map and never reacts
+    to unexpected obstacles.
+12. **The likelihood is annealed.** `likelihood_scale = 0.2` keeps the cloud
+    from collapsing but means the posterior is not calibrated and the reported
+    particle spread underestimates true error.
+13. **Wheel scale error is constant.** There is no random slip, and the motion
+    noise is an approximation of real encoder error.
 
 ---
 
@@ -392,33 +439,74 @@ LiDAR for localization and avoidance is Phase 5-6, not Phase 4.
 
 ---
 
-## 9. Phase 5 — Odometry and localization (next stage)
+## 9. Phase 5 — Odometry and localization (completed)
 
-**Goal:** estimate pose from noisy motion and range measurements instead of
-reading it from the simulator.
+**Outcome:** `Odometry`, `DistanceField` and `ParticleFilter` are implemented.
+The Phase 3 route is driven with the controller consuming the filter estimate
+under a 1% per-wheel scale mismatch. The filter holds 0.085 m position RMS and
+0.19 deg heading RMS while raw dead reckoning drifts 11.4 m RMS. Thirty-six
+localization tests cover integration, field geometry, motion, convergence,
+resampling, determinism and validation.
 
-Proposed scope:
-1. `src/atlas/robot/odometry.py` — integrate wheel speeds into a pose estimate
-   with optional wheel-scale error and noise. Pure dead reckoning drifts; that
-   drift is the motivation for the filter, not a bug to hide.
-2. `src/atlas/localization/` — start with a histogram or particle filter over
-   the occupancy grid. Motion model uses odometry; measurement model uses LiDAR
-   endpoints against the known map.
-3. Log estimation error (position and heading) against ground truth.
-4. Tests: odometry on straight lines/arcs, drift growth, filter convergence from
-   a known start, recovery from an offset prior, resampling sanity.
-5. `scripts/phase5_demo.py` — drive the Phase 3 route with noisy odometry and
-   LiDAR, overlay estimated vs true trajectory and error over time.
-6. Docs: Bayes filter recursion, motion/measurement models, particle
-   degeneracy and resampling.
+### Goal
+Estimate pose from noisy motion and range measurements instead of reading it
+from the simulator.
 
-Acceptance: estimated position RMS well below raw odometry drift over the demo
-run, with no crashes or NaNs, and all prior tests still passing.
+### Implemented scope
+1. `src/atlas/robot/odometry.py` — exact constant-twist dead reckoning with
+   per-wheel scale error; never reads simulator state.
+2. `src/atlas/localization/likelihood_field.py` — 8-connected chamfer distance
+   field with obstacle-boundary-only sources and analytic world-wall distance.
+3. `src/atlas/localization/particle_filter.py` — noisy unicycle motion model,
+   endpoint likelihood against the field, ESS-triggered systematic resampling
+   with roughening, circular-mean estimate.
+4. `tests/test_odometry.py`, `tests/test_likelihood_field.py`,
+   `tests/test_particle_filter.py` — 36 tests.
+5. `scripts/phase5_demo.py` — closed-loop route on the estimate, odometry vs
+   filter metrics, offset-prior recovery panel.
+6. Docs: Bayes recursion, motion and measurement models, likelihood annealing,
+   degeneracy, resampling and limitations.
+
+### Acceptance (met)
+- All prior tests still pass; total is 161.
+- Filter position RMS is far below raw odometry drift (`0.085 m` vs `11.395 m`).
+- Goal reached with zero collisions; no NaNs or crashes.
+- README, mathematics, design decisions and handoff updated to Phase 5.
 
 ---
 
-## 10. Working agreement
+## 10. Phase 6 — Dynamic obstacles and recovery (next stage)
 
-Keep the existing conventions and do not change Phase 0-4 behaviour; the
-current 125-test suite is the regression baseline. Commit implementation first,
+**Goal:** react to the environment changing after planning, and recover when the
+robot is blocked or lost.
+
+Proposed scope:
+1. `src/atlas/perception/` — detect unexpected obstacles from LiDAR returns
+   against the known map (map-consistency / free-space violation checks).
+2. Local obstacle memory — mark newly seen occupied cells, with decay or
+   confirmation so a noisy return does not permanently poison the map.
+3. Replanning — re-run A* on the updated grid from the current estimate to the
+   unchanged goal; handle "no path" explicitly.
+4. Recovery behaviours — when progress stalls or the path is blocked: stop,
+   rotate/scan to gather information, attempt a short backup, then replan; if
+   still blocked, declare failure rather than collide.
+5. Tests: obstacle detection from synthetic scans, local map updates, replan
+   around a new block, no-path handling, stall detection, backup behaviour,
+   recovery determinism.
+6. `scripts/phase6_demo.py` — drive the Phase 5 loop, drop an obstacle on the
+   route mid-run, show detection, replanned path, recovery manoeuvre and final
+   outcome.
+7. Docs: map-consistency test, replanning trigger, recovery state machine,
+   failure modes.
+
+Acceptance: the robot detects a newly placed obstacle, replans without collision,
+and reaches the goal on the modified map while the Phase 5 localization demo
+still passes.
+
+---
+
+## 11. Working agreement
+
+Keep the existing conventions and do not change Phase 0-5 behaviour; the
+current 161-test suite is the regression baseline. Commit implementation first,
 docs and demo second, then push.

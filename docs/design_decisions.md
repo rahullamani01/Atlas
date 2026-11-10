@@ -85,3 +85,41 @@
   make scan points directly usable in world coordinates.
 - The controller still uses ground-truth pose. Sensors are not wired into the
   navigation loop yet; that begins with localization in Phase 5.
+
+## Localization (Phase 5)
+
+- Odometry is a separate `Odometry` object that consumes wheel speeds. It never
+  reads `Simulator` or `robot.pose`, so drift is an honest property of the
+  estimator, not a side effect of sharing state with ground truth.
+- Wheel calibration error is modelled as per-wheel positive scales rather than a
+  single bias. A differential scale error creates yaw drift, which is the
+  failure mode the filter is meant to fix.
+- A particle filter was chosen over a histogram filter because the posterior can
+  be multimodal (corridors, repeated geometry) and the map is small enough that
+  a few hundred samples are cheap.
+- The measurement model scores scan endpoints against a precomputed distance
+  field rather than ray casting from every particle. This trades memory for a
+  large speed gain and keeps the update vectorised.
+- Only the free-facing boundary of obstacles contributes to the distance field.
+  Interior blocked cells would otherwise look like perfect surfaces and attract
+  particles into walls.
+- World walls are handled analytically in the distance lookup, not by marking
+  the border cells as sources. The analytic form removes the one-cell plateau
+  that otherwise leaves a persistent 0.2-0.5 m position bias.
+- The likelihood is annealed with `likelihood_scale = 0.2`. A product over 60
+  beams is so sharp that the cloud collapses onto one random particle; the
+  temperature keeps the posterior broad enough to track. This is a deliberate
+  approximation, not a calibrated sensor model.
+- At most 60 evenly spaced hits are used per update. Returns at `max_range` are
+  excluded through the hit mask.
+- Resampling is systematic and triggers only below `ESS < N/2`. Resampling every
+  step throws away information and increases variance.
+- Roughening jitter after resampling prevents duplicate particles from becoming
+  a permanent delta function while process noise is small.
+- The controller in the Phase 5 demo consumes the filter estimate, not ground
+  truth. This is the first closed loop in the project with imperfect state.
+- The filter is initialized with a small spread around the known start. Recovery
+  experiments use a wider prior, and the documented capture range is limited by
+  how much probability mass the initial cloud puts near the truth.
+- Global initialization exists for experiments but is not used by the demo; full
+  relocalization and recovery behaviours belong to Phase 6.

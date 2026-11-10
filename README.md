@@ -12,19 +12,23 @@ project in Python (motion model, planning, control, sensing, localization).
 | 2 | Occupancy grids, Dijkstra, A* path planning | complete |
 | 3 | PID control and closed-loop path following | complete |
 | 4 | LiDAR simulation and range uncertainty | complete |
-| 5 | Odometry and localization | next |
+| 5 | Odometry and particle-filter localization | complete |
+| 6 | Dynamic obstacles and recovery | next |
 
-Phase 4 adds a 2D LiDAR that casts analytic rays against walls and rectangular
-obstacles, returns body- and world-frame angles, supports mounting offsets and
-configurable fields of view, and can inject seeded Gaussian range noise. Scans
-are not yet used by the navigation loop.
+Phase 5 adds wheel odometry and a particle filter that fuses odometry with LiDAR
+against the known occupancy grid. The Phase 3 route is now driven using the
+filter's pose estimate instead of ground truth: raw dead reckoning drifts
+11.4 m RMS under a 1% wheel mismatch, while the filter holds 0.085 m RMS and
+reaches the goal without collision.
 
 ## Layout
 
 ```text
 src/atlas/
 ├── geometry.py                  # angles, distance, transforms
-├── robot/differential_drive.py  # pose, wheel <-> twist, motion integration
+├── robot/
+│   ├── differential_drive.py    # pose, wheel <-> twist, motion integration
+│   └── odometry.py              # dead reckoning with wheel-scale error
 ├── planning/
 │   ├── grid.py                  # occupancy grid, inflation, neighbours
 │   └── search.py                # Dijkstra, A*, heuristics, path reconstruction
@@ -33,18 +37,22 @@ src/atlas/
 │   └── path_follower.py         # carrot chasing with PID heading control
 ├── sensors/
 │   └── lidar.py                 # 2D ray casting, field of view, range noise
+├── localization/
+│   ├── likelihood_field.py      # distance-to-obstacle field
+│   └── particle_filter.py       # motion/measurement models, resampling
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 125 tests across geometry, motion, planning, control, sensing
+tests/                           # 161 tests across geometry, motion, planning, control, sensing, localization
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
 ├── phase3_demo.py               # P-only vs PID closed-loop tracking
-└── phase4_demo.py               # LiDAR scans at four poses, clean vs noisy
+├── phase4_demo.py               # LiDAR scans at four poses, clean vs noisy
+└── phase5_demo.py               # odometry vs particle-filter localization
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -64,6 +72,7 @@ python scripts/phase1_demo.py
 python scripts/phase2_demo.py
 python scripts/phase3_demo.py
 python scripts/phase4_demo.py
+python scripts/phase5_demo.py
 ```
 
 - **Phase 1:** straight line, in-place rotation, and integration error against
@@ -78,6 +87,10 @@ python scripts/phase4_demo.py
 - **Phase 4:** scans the same map from four poses with a 360° LiDAR, showing
   occlusion, misses and Gaussian range noise. Plot:
   `experiments/plots/phase4_lidar.png`.
+- **Phase 5:** drives the Phase 3 route under a 1% wheel-scale mismatch, using
+  the particle-filter estimate for control. Compares odometry drift with the
+  fused estimate and shows recovery from offset priors. Plot:
+  `experiments/plots/phase5_localization.png`.
 
 ## Motion model in brief
 
@@ -149,6 +162,26 @@ scan = lidar.scan(world, Pose(2.0, 2.0, 0.0))
 
 print(scan.ray_count, scan.hits, scan.ranges.min())
 print(scan.points().shape)           # world-space hit points, (N, 2)
+```
+
+## Localization in brief
+
+```python
+from atlas.localization import ParticleFilter
+from atlas.robot.odometry import Odometry
+
+odometry = Odometry(left_scale=0.99, right_scale=1.01)
+pf = ParticleFilter(grid, n_particles=800, max_beams=60,
+                    likelihood_scale=0.2, seed=4)
+pf.initialize(Pose(1.125, 1.125, 0.0), position_std=0.10, heading_std=0.05)
+
+odometry.update_wheels(omega_l, omega_r, dt=0.05)
+v, w = odometry.wheel_speeds_to_twist(omega_l, omega_r)
+
+pf.predict(v, w, 0.05)
+pf.update(lidar.scan(world, robot.pose))
+pose = pf.estimate()                 # weighted mean, circular heading
+print(pose.x, pose.y, pose.theta)
 ```
 
 Full derivations, error analysis and assumptions are in

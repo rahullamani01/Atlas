@@ -549,3 +549,222 @@ The measured noise RMS recovers the configured `0.03 m` within sampling error.
    bias and outliers.
 5. The scan is used for visualisation only so far. Nothing consumes it for
    mapping, localization or avoidance until Phases 5-6.
+
+---
+
+## 14. Odometry and localization (Phase 5)
+
+### 14.1 Dead reckoning and wheel scale error
+
+Odometry integrates wheel angular velocities with the geometry from Section 4:
+
+```text
+v_hat = r (omega_r + omega_l) / 2
+w_hat = r (omega_r - omega_l) / L
+```
+
+Wheel miscalibration is modelled as a scale on each wheel:
+
+```text
+omega_l^measured = s_l omega_l^true,    omega_r^measured = s_r omega_r^true
+```
+
+so the estimated twist is
+
+```text
+v_hat = r (s_r omega_r + s_l omega_l) / 2
+w_hat = r (s_r omega_r - s_l omega_l) / L
+```
+
+A pure differential error `delta = s_r - s_l` while driving straight
+(`omega_l = omega_r = omega`, `v = r omega`) adds a yaw-rate bias
+
+```text
+w_bias = (v / L) (s_r - s_l)
+```
+
+which integrates into heading error and then into unbounded lateral drift. This
+is the failure mode the filter has to correct; the scale errors are intentionally
+part of the model rather than hidden simulator noise.
+
+The pose update uses the exact constant-twist solution from Section 6.3 rather
+than Euler integration, so odometry itself is not a source of discretisation
+error.
+
+### 14.2 Bayes filter recursion
+
+Localization is the recursive Bayes filter
+
+```text
+bel(x_t) = eta * p(z_t | x_t) * integral p(x_t | x_{t-1}, u_t) bel(x_{t-1}) dx_{t-1}
+```
+
+where `x_t = (x, y, theta)` is the pose, `u_t` the odometry increment and `z_t`
+the LiDAR scan. The particle filter represents `bel` by `N` weighted samples:
+
+```text
+bel(x) ~ { (x_i, w_i) },   i = 1..N,   sum w_i = 1
+```
+
+Prediction samples the motion model; the measurement update multiplies each
+weight by `p(z | x_i)`; resampling concentrates samples where the posterior mass
+is.
+
+### 14.3 Motion model
+
+Each particle is propagated independently through the same exact-arc update used
+by odometry, but with noisy inputs:
+
+```text
+v_i = v_hat + N(0, sigma_v + alpha_v |v_hat|)
+w_i = w_hat + N(0, sigma_w + alpha_w |w_hat|)
+```
+
+```text
+if |w_i| < epsilon:
+    x_i += v_i cos(theta_i) dt
+    y_i += v_i sin(theta_i) dt
+else:
+    theta_new = theta_i + w_i dt
+    x_i += (v_i / w_i) (sin(theta_new) - sin(theta_i))
+    y_i -= (v_i / w_i) (cos(theta_new) - cos(theta_i))
+```
+
+Noise grows with speed through the `alpha` terms, so faster motion diffuses the
+cloud more. Sampling the inputs (rather than adding noise to the resulting pose)
+keeps every particle on a physically realisable arc.
+
+### 14.4 Distance-to-obstacle field
+
+For a scan endpoint `q`, the measurement model needs the distance to the nearest
+surface. Computing this per particle per beam with ray casting is too slow, so a
+field is precomputed once per map.
+
+Sources are the free-facing boundary cells of obstacles, plus the world walls.
+Interior blocked cells are deliberately **not** sources: otherwise a particle
+pushed deep inside an obstacle would score a distance of zero and be rewarded
+for an impossible pose. The field is built with an 8-connected chamfer
+transform, with cardinal step `1` and diagonal step `sqrt(2)`, then multiplied
+by the grid resolution:
+
+```text
+D[i, j] = resolution * min_source (chamfer distance in cells)
+```
+
+The distance used for scoring is
+
+```text
+d(x, y) = min( D[cell(x, y)],  distance to the nearest world wall )
+```
+
+The wall term is analytic, `min(x, W_x - x, y, W_y - y)`, which removes the
+one-cell plateau that a rasterised border would otherwise create. Points outside
+the grid have infinite distance and are treated as maximally unlikely.
+
+### 14.5 Measurement model
+
+For beam `k` with range `r_k` and body-frame angle `phi_k`, particle `i` places
+the endpoint at
+
+```text
+q_ik = pose_i (+) ( mount + r_k [cos phi_k, sin phi_k] )
+```
+
+The endpoint likelihood uses the distance field:
+
+```text
+p(z | x_i) proportional to exp( -0.5 * lambda * sum_k ( min(d(q_ik), d_max) / sigma_z )^2 )
+```
+
+The cap `d_max` bounds the penalty so that a single grossly inconsistent beam
+cannot dominate the sum. The temperature `lambda` is essential: treating all
+beams as independent and multiplying their likelihoods makes the posterior
+extremely sharp, so one of 500-800 particles wins by chance and the filter
+collapses. `lambda = 0.2` flattens the likelihood enough that the cloud can move
+coherently toward the true pose. This is an annealed likelihood, not a
+probabilistically exact one, and it is documented as such.
+
+To keep the update cheap, at most `max_beams` returns are used, evenly spaced
+over the valid indices. The scan's hit mask excludes misses, so `max_range`
+returns do not contribute.
+
+### 14.6 Degeneracy and resampling
+
+The effective sample size is
+
+```text
+ESS = 1 / sum_i w_i^2
+```
+
+and ranges from `1` (one particle carries all weight) to `N` (uniform weights).
+Resampling triggers when `ESS < N / 2`, so the filter only duplicates particles
+when the measurement has actually concentrated the posterior.
+
+Systematic resampling draws one offset `u_0 ~ U(0, 1/N)` and uses
+`u_i = u_0 + i/N`, selecting particles by the cumulative weight. It has lower
+variance than multinomial resampling and preserves the sample count exactly.
+A small Gaussian jitter (roughening) is added after resampling so duplicated
+particles do not become permanently identical; without it, process noise is the
+only way for the cloud to regain diversity.
+
+### 14.7 Pose estimate
+
+The reported pose is the weighted mean with a circular heading mean:
+
+```text
+x_hat = sum w_i x_i
+y_hat = sum w_i y_i
+theta_hat = atan2( sum w_i sin theta_i, sum w_i cos theta_i )
+```
+
+The circular form avoids the wrap-around error of averaging `+pi` and `-pi`
+directly. Weighted marginal standard deviations of `x` and `y` are also exposed
+as a cheap uncertainty estimate.
+
+### 14.8 Measured behaviour
+
+Closed-loop Phase 5 demo: 29.17 m route, 20 Hz, 800 particles, 60 beams per
+update, LiDAR `sigma = 0.02 m`, wheel scales `0.99` and `1.01`.
+
+| Metric | Odometry | Particle filter |
+|---|---:|---:|
+| Position RMS [m] | 11.395 | **0.085** |
+| Position max [m] | 23.875 | **0.122** |
+| Final position error [m] | 23.875 | **0.080** |
+| Heading RMS [deg] | 64.87 | **0.19** |
+| Final heading error [deg] | 110.04 | **0.07** |
+
+The robot reaches the goal with zero collisions while the controller consumes
+only the filter estimate. The 1% wheel mismatch accumulates almost two radians
+of heading error over the 59 s run, which is why raw dead reckoning ends tens of
+metres away.
+
+Stationary recovery with a deliberately offset prior shows that the filter's
+capture range depends on honest prior spread:
+
+| Prior position std | Error after 1 update | Error after 30 updates |
+|---:|---:|---:|
+| 0.3 m | 0.45 m | 0.41 m |
+| 0.5 m | 0.22 m | 0.12 m |
+| 0.8 m | 0.07 m | 0.08 m |
+
+A prior that excludes the true pose cannot be rescued by resampling, because no
+particle is near the correct mode. Wider, honest uncertainty converges close to
+the tracking accuracy. Global relocalization and recovery behaviours are Phase 6.
+
+### 14.9 Limitations
+
+1. The map is assumed known and static. There is no mapping, loop closure or
+   dynamic-obstacle handling.
+2. Localization is 2D; roll, pitch and sensor height are ignored.
+3. The likelihood is annealed for robustness, so the reported posterior is not a
+   calibrated probability and the particle spread underestimates true error.
+4. The capture range is limited by particle coverage. A wrong prior wider than
+   the cloud, or a kidnapped robot, requires global initialization or injection.
+5. Beam endpoints are scored independently; there is no correlation model for
+   surfaces, clutter or outliers.
+6. The scan is sampled to `max_beams`, which can miss a small obstacle that only
+   a few rays see.
+7. Wheel scale error is constant. Real encoders also have random slip, which the
+   motion noise only approximates.
+8. There is no dynamic replanning; the planned path is fixed for the whole run.
