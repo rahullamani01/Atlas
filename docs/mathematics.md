@@ -428,3 +428,124 @@ simulator itself has no wheel asymmetry yet.
    natural improvement.
 5. Localization is assumed perfect. Phase 5 replaces the true pose with an
    estimate, at which point controller noise sensitivity matters.
+
+## 13. LiDAR simulation (Phase 4)
+
+### 13.1 Ray model
+
+A ray starts at the sensor origin `o = (o_x, o_y)` and travels along a unit
+direction `d = (cos φ, sin φ)`:
+
+```text
+p(t) = o + t d,    t >= 0
+```
+
+The measured range is the smallest positive `t` at which the ray meets an
+obstacle or a world wall, capped at `max_range`.
+
+### 13.2 Ray versus axis-aligned rectangle
+
+Rectangles are axis-aligned, so each ray can be intersected with the rectangle's
+x-slab and y-slab independently (the slab method).
+
+For one axis with origin `o`, direction `d` and slab `[low, high]`:
+
+```text
+if |d| < ε:
+    miss unless low <= o <= high
+else:
+    t1 = (low - o) / d
+    t2 = (high - o) / d
+    swap so t1 <= t2
+    t_enter = max(t_enter, t1)
+    t_exit  = min(t_exit, t2)
+```
+
+The ray hits the rectangle when `t_enter <= t_exit` and `t_exit >= 0`. The entry
+distance is `t_enter`, except when the origin is inside the rectangle, where
+`t_enter < 0` and the first surface is at `t_exit`. In this project the robot is
+never inside an obstacle, but the case is handled.
+
+### 13.3 World boundary
+
+A ray starting inside the world always leaves it. The distance to each wall is
+
+```text
+t_x = (W - o_x) / d_x   if d_x > 0
+t_x = (0 - o_x) / d_x   if d_x < 0
+```
+
+and similarly for `t_y`; the boundary distance is the smallest non-negative one.
+Walls are implicit and do not need to be stored as obstacles.
+
+### 13.4 Nearest return
+
+For each ray:
+
+```text
+range = min(
+    boundary distance,
+    distance to every rectangle that is hit,
+    max_range
+)
+```
+
+A ray that hits nothing within `max_range` reports exactly `max_range`. This
+keeps the output a fixed-size array and makes "no return" explicit through the
+hit mask, rather than using `inf` in downstream code.
+
+### 13.5 Scan geometry
+
+For `n = round(fov / angle_increment)` rays, the actual angular step is
+`Δ = fov / n` and body-frame angles are
+
+```text
+φ_i = -fov/2 + i Δ + angle_offset,    i = 0..n-1
+```
+
+World angles add the robot heading: `φ_world = φ_i + θ`. A full 360 degree scan
+therefore spans `[-π, π)`. Narrower fields are centred on the heading, so a
+180 degree sensor looks forward, not sideways.
+
+A sensor mounted at body-frame offset `(a, b)` has world origin
+
+```text
+o_x = x + a cos θ - b sin θ
+o_y = y + a sin θ + b cos θ
+```
+
+### 13.6 Range noise
+
+When `range_sigma > 0`, each finite return is perturbed independently:
+
+```text
+r_measured = clip( r_true + N(0, sigma²), 0, max_range )
+```
+
+Noise is not added to no-return rays, because there is no surface to reflect
+from. Clipping means a noisy return can reach `max_range` and be reported as a
+miss, which is physically reasonable at the sensor's limit.
+
+### 13.7 Measured behaviour
+
+Phase 4 demo, 360 rays, 8 m range, `sigma = 0.03 m`:
+
+| Pose | Hits | Min range | Noise RMS |
+|---|---:|---:|---:|
+| (2.0, 2.0, 0°) | 315/360 | 2.00 m | 0.028 m |
+| (5.5, 12.0, 90°) | 255/360 | 0.50 m | 0.028 m |
+| (12.0, 6.0, 180°) | 291/360 | 2.24 m | 0.030 m |
+| (17.5, 17.5, -90°) | 250/360 | 2.50 m | 0.030 m |
+
+The measured noise RMS recovers the configured `0.03 m` within sampling error.
+
+### 13.8 Limitations
+
+1. Rays are infinitely thin: small obstacles can be missed between rays, and
+   there is no beam divergence or intensity return.
+2. Only axis-aligned rectangles are supported, not arbitrary polygons or circles.
+3. Reflections, transparency, multipath and mixed pixels are not modelled.
+4. Noise is independent per ray and Gaussian; real sensors have range-dependent
+   bias and outliers.
+5. The scan is used for visualisation only so far. Nothing consumes it for
+   mapping, localization or avoidance until Phases 5-6.

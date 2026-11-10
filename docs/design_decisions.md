@@ -67,3 +67,21 @@
   action. This is an experiment-only disturbance, not a simulator feature.
 - Tracking metrics are computed in the experiment script. A reusable
   `evaluation/` module is deferred to Phase 7.
+
+## Sensors (Phase 4)
+
+- LiDAR returns are distances, not points. `LidarScan` keeps body-frame angles,
+  world-frame angles and the world sensor origin, so callers do not have to
+  re-derive the transformation.
+- A miss is encoded as exactly `max_range`, with `hit_mask` separating hits from
+  misses. No `inf` or NaN values enter the API.
+- Full-field scans span [-pi, pi); partial fields are centred on the robot
+  heading. Body-frame angle 0 is always along +x.
+- Ray casting is analytic (slab method for rectangles, closed form for walls),
+  not sampled along the ray, so thin walls are not missed through step size.
+- Range noise is Gaussian, independent per ray, applied only to finite hits and
+  clipped to the sensor range. A seed can be supplied for reproducible scans.
+- The sensor mount is a body-frame offset; the returned origin and world angles
+  make scan points directly usable in world coordinates.
+- The controller still uses ground-truth pose. Sensors are not wired into the
+  navigation loop yet; that begins with localization in Phase 5.

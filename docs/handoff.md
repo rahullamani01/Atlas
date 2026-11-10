@@ -2,8 +2,8 @@
 
 **Date:** 10 November 2026
 **Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 3 — PID control and closed-loop path following
-**Tests:** 105 passing (`pytest`)
+**Latest work:** Phase 4 — LiDAR simulation and range uncertainty
+**Tests:** 125 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -16,14 +16,16 @@
 | 1 | Differential-drive kinematics and motion simulation | complete |
 | 2 | Occupancy grids, Dijkstra, A* path planning | complete |
 | 3 | PID control and closed-loop path following | complete |
-| 4 | LiDAR simulation and sensor uncertainty | next |
+| 4 | LiDAR simulation and range uncertainty | complete |
+| 5 | Odometry and localization | next |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
-optimal collision-free route, and drive the route with feedback control.
+optimal collision-free route, drive the route with feedback control, and sense
+surrounding geometry with a simulated 2D LiDAR.
 
-It **cannot yet perceive** the environment; the controller uses ground-truth
-pose and the known map. That is Phase 4-5.
+It **cannot yet estimate its own pose** from those measurements, and the
+controller still consumes ground truth. That is Phase 5.
 
 ---
 
@@ -76,6 +78,18 @@ pose and the known map. That is Phase 4-5.
   - carrot chasing on world-space waypoints; PID heading control; turns in
     place when the carrot is behind; stops within goal tolerance
 
+### Phase 4 — sensing (`src/atlas/sensors/`)
+- `Lidar(max_range=10.0, fov=2*pi, angle_increment=pi/180, range_sigma=0.0,
+  mount_offset=(0,0), angle_offset=0.0, seed=None)`
+  - `scan(world, pose) -> LidarScan`
+  - analytic ray casting: slab method for rectangles, closed form for walls
+  - `ray_count`, body-frame `angles`, actual `angle_increment`
+- `LidarScan(ranges, angles, world_angles, origin, max_range)`
+  - `hit_mask`, `hits`, `ray_count`
+  - `points()` returns world-space hit points
+  - a miss is exactly `max_range`, never `inf`/NaN
+- Seeded Gaussian range noise on finite hits, clipped to sensor range
+
 ### Experiments
 - `scripts/phase1_demo.py` — straight line, rotation, integrator error table,
   circle and collision plots.
@@ -84,11 +98,14 @@ pose and the known map. That is Phase 4-5.
 - `scripts/phase3_demo.py` — plans the Phase 2 map, follows it with P-only and
   PID heading control under a wheel bias, reports metrics, saves
   `experiments/plots/phase3_tracking.png`.
+- `scripts/phase4_demo.py` — 360 degree scans at four poses, clean vs noisy,
+  saves `experiments/plots/phase4_lidar.png`.
 
 ### Documentation
 - `docs/mathematics.md` — pose conventions, forward/inverse kinematics,
   nonholonomic constraint, integrators, ICC, error measurements, occupancy
-  grids, inflation, graph search, heuristic admissibility, PID and tracking.
+  grids, inflation, graph search, heuristic admissibility, PID, tracking and
+  ray casting.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -96,7 +113,7 @@ pose and the known map. That is Phase 4-5.
 
 ## 3. Verified numbers
 
-- 105 tests pass.
+- 125 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -111,6 +128,11 @@ pose and the known map. That is Phase 4-5.
   - P-only cross-track RMS `0.0513 m`, PID `0.0258 m` (50% reduction)
   - final error `0.099 m` (P) and `0.098 m` (PID), inside the 0.1 m tolerance
   - PID control effort `14.1 rad` vs P-only `14.5 rad`
+- Phase 4 demo (360 rays, 8 m range, `sigma = 0.03 m`):
+  - scans from four poses return 250-315 hits out of 360
+  - measured noise RMS `0.028-0.030 m`, matching the configured sigma
+  - minimum reported range `0.50 m` beside the long wall
+  - rays correctly stop at obstacles and miss beyond 8 m
 
 ---
 
@@ -138,6 +160,7 @@ pytest
 python scripts/phase1_demo.py
 python scripts/phase2_demo.py
 python scripts/phase3_demo.py
+python scripts/phase4_demo.py
 ```
 
 Repository workflow used so far:
@@ -153,7 +176,8 @@ Repository workflow used so far:
 ## 6. Known limitations and gotchas
 
 1. **Control assumes perfect state.** The follower uses the simulator's true
-   pose. Localization error arrives in Phase 5 and will degrade tracking.
+   pose. LiDAR exists but is not fused into navigation, so localization error
+   (Phase 5) is not represented yet.
 2. **Grid paths cut visually close to corners.** Inflation gives clearance plus
    a conservative half-cell; the Phase 3 demo adds a 0.05 m planning margin
    because a lookahead controller cuts corners. Longer lookaheads need more
@@ -171,6 +195,12 @@ Repository workflow used so far:
 7. **No dynamic replanning.** The grid is static; that is Phase 6.
 8. **No metrics module.** Tracking metrics live in the Phase 3 demo; a
    reusable `evaluation/` module arrives in Phase 7.
+9. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
+   there is no beam width, intensity, multipath or mixed-pixel model.
+10. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
+    is independent Gaussian rather than range-dependent with outliers.
+11. **Scans are uncalibrated and unused.** Nothing consumes `LidarScan` outside
+    the demo yet; mapping, localization and avoidance come later.
 
 ---
 
@@ -334,31 +364,61 @@ second strategy later; start with PID because the phase is about feedback.
 
 ---
 
-## 8. Phase 4 — Sensor simulation (next stage)
+## 8. Phase 4 — Sensor simulation (completed)
 
-**Goal:** replace perfect environmental knowledge with simulated range
-measurements, without yet estimating pose.
+**Outcome:** `Lidar` and `LidarScan` are implemented with analytic ray casting,
+360°/partial fields of view, mounting offsets, seeded Gaussian range noise and
+world-space hit points. Twenty sensor tests cover walls, rectangles, occlusion,
+range limits, angle conventions, mounts and noise statistics.
 
-Proposed scope:
+### Goal
+Replace perfect environmental knowledge with simulated range measurements,
+without yet estimating pose.
+
+### Implemented scope
 1. `src/atlas/sensors/lidar.py` — 2D LiDAR with configurable angular field of
    view, angular resolution, max range and mounting offset.
-2. Ray casting against `RectObstacle` and world boundaries, returning
-   `(angle, range)` measurements; `inf` or `max_range` for no hit.
-3. Optional Gaussian range noise with a documented standard deviation.
-4. `tests/test_lidar.py` — known geometry (parallel wall, corner, behind the
-   robot, out of range), noise statistics, measurement count and angle
-   convention.
-5. `scripts/phase4_demo.py` — scan the Phase 2 world from several poses and plot
-   the rays and returns against ground truth.
+2. Ray casting against `RectObstacle` and world boundaries; misses report
+   exactly `max_range`.
+3. Optional Gaussian range noise with a documented standard deviation and seed.
+4. `tests/test_lidar.py` — known geometry, occlusion, out-of-range, noise
+   statistics, measurement count and angle convention.
+5. `scripts/phase4_demo.py` — scans the Phase 2 world from four poses and plots
+   rays and returns against ground truth.
 6. Docs: ray-rectangle intersection derivation, sensor conventions and limits.
 
 The Phase 3 follower still runs on ground-truth pose and the known path. Using
-LiDAR for obstacle avoidance and localization is Phase 5-6, not Phase 4.
+LiDAR for localization and avoidance is Phase 5-6, not Phase 4.
 
 ---
 
-## 9. Working agreement
+## 9. Phase 5 — Odometry and localization (next stage)
 
-Keep the existing conventions and do not change Phase 0-3 behaviour; the
-current 105-test suite is the regression baseline. Commit implementation first,
+**Goal:** estimate pose from noisy motion and range measurements instead of
+reading it from the simulator.
+
+Proposed scope:
+1. `src/atlas/robot/odometry.py` — integrate wheel speeds into a pose estimate
+   with optional wheel-scale error and noise. Pure dead reckoning drifts; that
+   drift is the motivation for the filter, not a bug to hide.
+2. `src/atlas/localization/` — start with a histogram or particle filter over
+   the occupancy grid. Motion model uses odometry; measurement model uses LiDAR
+   endpoints against the known map.
+3. Log estimation error (position and heading) against ground truth.
+4. Tests: odometry on straight lines/arcs, drift growth, filter convergence from
+   a known start, recovery from an offset prior, resampling sanity.
+5. `scripts/phase5_demo.py` — drive the Phase 3 route with noisy odometry and
+   LiDAR, overlay estimated vs true trajectory and error over time.
+6. Docs: Bayes filter recursion, motion/measurement models, particle
+   degeneracy and resampling.
+
+Acceptance: estimated position RMS well below raw odometry drift over the demo
+run, with no crashes or NaNs, and all prior tests still passing.
+
+---
+
+## 10. Working agreement
+
+Keep the existing conventions and do not change Phase 0-4 behaviour; the
+current 125-test suite is the regression baseline. Commit implementation first,
 docs and demo second, then push.
