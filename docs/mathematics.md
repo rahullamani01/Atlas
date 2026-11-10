@@ -768,3 +768,159 @@ the tracking accuracy. Global relocalization and recovery behaviours are Phase 6
 7. Wheel scale error is constant. Real encoders also have random slip, which the
    motion noise only approximates.
 8. There is no dynamic replanning; the planned path is fixed for the whole run.
+
+---
+
+## 15. Dynamic obstacles and recovery (Phase 6)
+
+### 15.1 Detecting unexpected returns
+
+Let `M(c) in {0, 1}` be the known occupancy of cell `c` and let
+`q_1, ..., q_K` be the world-space LiDAR endpoints of one scan. The detector
+does not trust `M` blindly: a return is *unexpected* when it lands in a cell
+that the known map, including a one-cell tolerance ring around known obstacles,
+marks free.
+
+Two special cases are handled before accumulation:
+
+1. **World walls are implicit.** The planning grid does not store the outer
+   boundary as blocked cells, so returns from it would otherwise look new. The
+   outer ring of cells is treated as known.
+2. **Known obstacle surfaces are already blocked** or within the tolerance ring,
+   including the inflation margin, so they do not generate evidence.
+
+For each unexpected return, evidence is accumulated per cell. With `n_t(c)`
+endpoints landing in `c` during scan `t`:
+
+```text
+E_{t+1}(c) = gamma E_t(c) + n_t(c),    0 <= gamma < 1
+```
+
+The decay term makes the memory finite. A persistent obstacle is re-observed
+every scan and stays confirmed; a one-off noisy return fades away. Confirmation
+uses hysteresis:
+
+```text
+C_t(c) = ( C_{t-1}(c) OR E_t(c) >= theta_confirm )
+         AND NOT ( E_t(c) < theta_release )
+```
+
+with `theta_release < theta_confirm`. The blocked set added to the planner is
+the confirmed set grown by a clearance radius and clipped against the known
+map:
+
+```text
+B_t = dilate(C_t, ceil(delta_clear / resolution)) \ M
+```
+
+Growing by `delta_clear` is what gives the planner room for the robot body. The
+planning grid used by A* is `M union B_t`. The detector returns only the cells
+that became blocked on the current scan, so the supervisor knows when a replan
+may be needed.
+
+The default parameters are `gamma = 0.8`, `theta_confirm = 2`,
+`theta_release = 0.5`, one cell of known-map tolerance and `0.25 m` clearance.
+The Phase 6 demo uses `0.30 m` clearance to match its planning inflation.
+
+### 15.2 Replanning
+
+After a scan, if any cell on the current path is now blocked, the supervisor
+replans. The start cell is the cell containing the current pose; if that cell is
+blocked (for example because a new obstacle's clearance covers the robot), a
+ring search returns the nearest free cell:
+
+```text
+for radius = 1, 2, ..., R:
+    for cells on the square ring:
+        if free, choose the closest one
+return failure if no free cell is found
+```
+
+A* then searches `M union B_t` from that start to the unchanged goal. Success
+replaces the path, resets the follower and continues driving. Failure enters the
+recovery state machine.
+
+Checking only the path cells is sufficient because consecutive grid path cells
+are 8-neighbours and corner cutting is disabled; a blocked segment implies a
+blocked cell on the path.
+
+### 15.3 Recovery state machine
+
+| State | Command | Exit condition |
+|---|---|---|
+| `DRIVING` | path-follower twist | goal reached, path blocked, or no progress |
+| `SCANNING` | `(0, +scan_speed)` | `scan_steps` elapsed, then replan |
+| `BACKING_UP` | `(backup_speed, 0)` | `backup_steps` elapsed, then replan |
+| `ARRIVED` | `(0, 0)` | terminal |
+| `FAILED` | `(0, 0)` | terminal |
+
+Transitions:
+
+```text
+DRIVING --path blocked, replan fails--> SCANNING
+DRIVING --no displacement for W steps--> SCANNING
+SCANNING --replan succeeds--> DRIVING
+SCANNING --replan fails--> BACKING_UP
+BACKING_UP --replan succeeds--> DRIVING
+BACKING_UP --replan fails or back is not free--> FAILED
+DRIVING --goal within tolerance--> ARRIVED
+```
+
+Scanning rotates in place while still integrating scans, so a temporary or
+partially observed obstacle has another chance to be resolved. Backing up is
+short and checks both the planning grid and the world boundary before moving.
+Failure is an explicit stop; the supervisor never keeps driving into a known
+blocked route.
+
+Default parameters in the implementation are `scan_steps = 30` at
+`scan_speed = 1.0 rad/s`, `backup_steps = 20` at `backup_speed = -0.15 m/s`, and
+a stall window of 120 steps with a 0.10 m displacement threshold. At 20 Hz this
+is 1.5 s of scanning and 0.15 m of backing up.
+
+### 15.4 Measured behaviour
+
+Phase 6 demo: 29.17 m route, 20 Hz, `0.30 m` planning inflation, a
+`0.60 x 0.60 m` block dropped on the route at `t = 4.0 s`.
+
+| Metric | Reactive | Blind |
+|---|---:|---:|
+| Reached goal | **yes** | no |
+| Collisions | **0** | 1 |
+| Duration [s] | 58.8 | 10.0 |
+| Final distance to goal [m] | **0.10** | 20.00 |
+| Detected cells | 56 | - |
+| Replans | 1 | 0 |
+
+The block is visible from 3.2 m away, so the first post-injection scan provides
+enough evidence to confirm it and the replan happens one control step later
+(`t = 4.05 s`). The robot detours to the right of the block and still reaches the
+goal with zero collisions. The blind baseline keeps following the stale path and
+stops at the block after 10 s, 20 m from the goal.
+
+A statically sealed map (no route from the start) exercises the no-path branch:
+the supervisor scans for three steps, backs up for two, then reports `FAILED`
+with a zero command. No collision is attempted.
+
+Detection latency depends on how many rays hit a cell per scan. A nearby face
+seen by many rays confirms in one scan; a distant or grazing surface needs
+several scans as evidence accumulates.
+
+### 15.5 Limitations
+
+1. Only observed surfaces are added to the map. Occluded or unseen parts of a
+   new obstacle remain unknown, and a planner can route through space that is
+   actually blocked.
+2. Moving objects are treated as static cells. There is no object tracking,
+   velocity estimation or prediction.
+3. Evidence decay can forget a real obstacle once it leaves the field of view.
+4. The known map is assumed correct; mapping errors and changes to known
+   obstacles are not repaired.
+5. Replanning is grid A* with the existing follower. There is no path smoothing,
+   kinodynamic planning, or time-optimal recovery.
+6. The recovery sequence is fixed, not learned or adapted to the failure type.
+7. The Phase 6 demo uses ground-truth pose to isolate perception and recovery.
+   The supervisor accepts any pose source, but combining it with the Phase 5
+   estimate and a dynamic distance field is future work.
+8. A newly confirmed obstacle is inflated by a fixed clearance; very tight
+   corridors can therefore be declared impassable even when a smaller robot
+   could pass.

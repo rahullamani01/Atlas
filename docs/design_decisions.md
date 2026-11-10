@@ -123,3 +123,42 @@
   how much probability mass the initial cloud puts near the truth.
 - Global initialization exists for experiments but is not used by the demo; full
   relocalization and recovery behaviours belong to Phase 6.
+
+## Dynamic obstacles and recovery (Phase 6)
+
+- Perception owns a **copy** of the planning grid. `DynamicObstacleMap` never
+  mutates the caller's known map, so a failed experiment can be reset and the
+  static map remains the reference.
+- Unexpected returns are detected by map inconsistency: a LiDAR endpoint in a
+  cell that the known map (plus a one-cell tolerance ring) says is free. This is
+  cheap, uses the existing grid, and needs no learned classifier.
+- The outer ring of the grid is treated as known even though the planning grid
+  does not store world walls as blocked cells. Without this, every scan would
+  "discover" the four walls.
+- Evidence accumulates with decay and confirmation/release hysteresis instead of
+  blocking on a single return. This rejects isolated noisy points and lets a
+  temporary obstacle fade after it leaves the field of view.
+- Confirmed cells are grown by a clearance radius before entering the planner,
+  so a new obstacle is treated like a known one and the robot body fits around
+  it. The Phase 6 demo uses 0.30 m clearance to match its planning inflation.
+- Replanning is triggered only when the **current path** is blocked, not on
+  every map change. Replanning for off-path clutter would cause path churn for
+  no benefit.
+- The replan start is snapped to the nearest free cell by a ring search. Without
+  this, a new obstacle's clearance around the robot's own cell would make every
+  `a_star` call fail.
+- The recovery state machine is deliberately small: scan in place, replan, back
+  up, replan, then stop. Each behaviour is bounded in time and distance.
+- Failure is a safe stop, not a collision. The supervisor reports `FAILED` and
+  commands zero; it never keeps following a path known to be blocked.
+- The stall detector uses displacement over a window rather than instantaneous
+  speed, so normal in-place turning does not look like a failure.
+- The Phase 6 demo uses ground-truth pose to isolate perception and recovery.
+  Phase 5 already demonstrated the same control loop on the filter estimate; the
+  supervisor is agnostic to where the pose comes from.
+- The Phase 6 demo plans with 0.30 m inflation (0.20 m body plus 0.10 m margin)
+  instead of the Phase 3 value of 0.25 m. Replanning from arbitrary poses can
+  produce sharper corners, and the larger margin keeps the follower clear of
+  known obstacles. Earlier phases keep their original settings.
+- The blind baseline is intentional: it shows the cost of ignoring perception,
+  not a supported operating mode.

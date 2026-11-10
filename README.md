@@ -13,13 +13,16 @@ project in Python (motion model, planning, control, sensing, localization).
 | 3 | PID control and closed-loop path following | complete |
 | 4 | LiDAR simulation and range uncertainty | complete |
 | 5 | Odometry and particle-filter localization | complete |
-| 6 | Dynamic obstacles and recovery | next |
+| 6 | Dynamic obstacles and recovery | complete |
+| 7 | Evaluation and metrics | next |
 
-Phase 5 adds wheel odometry and a particle filter that fuses odometry with LiDAR
-against the known occupancy grid. The Phase 3 route is now driven using the
-filter's pose estimate instead of ground truth: raw dead reckoning drifts
-11.4 m RMS under a 1% wheel mismatch, while the filter holds 0.085 m RMS and
-reaches the goal without collision.
+Phase 6 makes the navigation loop react to the world changing after planning.
+LiDAR returns that disagree with the known map accumulate evidence in a dynamic
+obstacle map, confirmed cells are inflated for clearance, and A* replans around
+them. In the demo a block is dropped on the route mid-run: the reactive robot
+detects it, replans once and reaches the goal with zero collisions, while a
+blind baseline follows the stale path and stops at the block. A no-route branch
+scans, backs up and reports failure instead of driving into a known obstacle.
 
 ## Layout
 
@@ -40,19 +43,24 @@ src/atlas/
 ├── localization/
 │   ├── likelihood_field.py      # distance-to-obstacle field
 │   └── particle_filter.py       # motion/measurement models, resampling
+├── perception/
+│   └── obstacle_detector.py     # map-inconsistent returns, evidence, clearance
+├── recovery/
+│   └── supervisor.py            # replanning and the recovery state machine
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 161 tests across geometry, motion, planning, control, sensing, localization
+tests/                           # 179 tests across geometry, motion, planning, control, sensing, localization, perception, recovery
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
 ├── phase3_demo.py               # P-only vs PID closed-loop tracking
 ├── phase4_demo.py               # LiDAR scans at four poses, clean vs noisy
-└── phase5_demo.py               # odometry vs particle-filter localization
+├── phase5_demo.py               # odometry vs particle-filter localization
+└── phase6_demo.py               # reactive vs blind navigation with a new obstacle
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -73,6 +81,7 @@ python scripts/phase2_demo.py
 python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
+python scripts/phase6_demo.py
 ```
 
 - **Phase 1:** straight line, in-place rotation, and integration error against
@@ -91,6 +100,10 @@ python scripts/phase5_demo.py
   the particle-filter estimate for control. Compares odometry drift with the
   fused estimate and shows recovery from offset priors. Plot:
   `experiments/plots/phase5_localization.png`.
+- **Phase 6:** drops a new block on the route mid-run and compares reactive
+  navigation against a blind baseline. Reports detection, replanning, collisions
+  and goal distance, and shows the dynamic obstacle map growing. Plot:
+  `experiments/plots/phase6_recovery.png`.
 
 ## Motion model in brief
 
@@ -182,6 +195,28 @@ pf.predict(v, w, 0.05)
 pf.update(lidar.scan(world, robot.pose))
 pose = pf.estimate()                 # weighted mean, circular heading
 print(pose.x, pose.y, pose.theta)
+```
+
+## Recovery in brief
+
+```python
+from atlas.perception import DynamicObstacleMap
+from atlas.recovery import NavigationSupervisor
+
+# Perception owns a copy of the known grid and grows it from surprise returns.
+detector = DynamicObstacleMap(grid, clearance=0.30)
+supervisor = NavigationSupervisor(grid, goal_cell, detector=detector)
+supervisor.plan(pose)                # False if the goal is already unreachable
+
+while not (supervisor.goal_reached or supervisor.failed):
+    scan = lidar.scan(world, robot.pose)
+    command = supervisor.step(pose, scan, dt=0.05)   # replans when blocked
+    robot.step(command.v, command.w, dt=0.05)
+    pose = pf.estimate()
+
+print(supervisor.state, supervisor.replan_count, len(supervisor.detected_cells))
+# a scan/backup recovery ends in NavState.FAILED with a zero command,
+# never in a collision
 ```
 
 Full derivations, error analysis and assumptions are in

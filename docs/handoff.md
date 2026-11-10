@@ -2,8 +2,8 @@
 
 **Date:** 10 November 2026
 **Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 5 — odometry and particle-filter localization
-**Tests:** 161 passing (`pytest`)
+**Latest work:** Phase 6 — dynamic obstacles and recovery
+**Tests:** 179 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -18,17 +18,20 @@
 | 3 | PID control and closed-loop path following | complete |
 | 4 | LiDAR simulation and range uncertainty | complete |
 | 5 | Odometry and particle-filter localization | complete |
-| 6 | Dynamic obstacles and recovery | next |
+| 6 | Dynamic obstacles and recovery | complete |
+| 7 | Evaluation and metrics | next |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
 optimal collision-free route, drive the route with feedback control, sense
-surrounding geometry with a simulated 2D LiDAR, and estimate its own pose by
-fusing wheel odometry with those scans.
+surrounding geometry with a simulated 2D LiDAR, estimate its own pose by fusing
+wheel odometry with those scans, and react when the world changes after
+planning.
 
-The controller now closes the loop on the **estimated** pose, not ground truth.
-It still assumes a static map and a known route, so detecting and driving around
-unexpected obstacles is Phase 6.
+The navigation loop now detects LiDAR returns that disagree with the known map,
+grows a dynamic obstacle map, replans around confirmed obstacles, and falls back
+to a bounded scan/backup/fail recovery sequence. It still has no reusable
+evaluation harness or aggregate benchmark, which is the natural Phase 7.
 
 ---
 
@@ -116,6 +119,30 @@ unexpected obstacles is Phase 6.
   - noisy unicycle motion model; endpoint likelihood from the distance field;
     systematic resampling below `ESS < N/2`; roughening jitter
 
+### Phase 6 — perception and recovery (`src/atlas/`)
+- `DynamicObstacleMap(known_grid, confirm_threshold=2.0, unblock_threshold=0.5,
+  decay=0.8, tolerance=1, clearance=0.25)`
+  - owns a copy of the planning grid; never mutates `known_grid`
+  - `integrate(scan) -> list[Cell]` returns cells that became blocked
+  - `evidence` accumulates map-inconsistent returns and decays each update
+  - `confirmed` uses hysteresis; `dynamic` is the inflated confirmed footprint
+  - `grid` is the known map plus the dynamic footprint
+  - `reset()`, `detected_count`
+  - outer cell ring and known obstacles with a one-cell tolerance are ignored
+- `NavState` — `DRIVING`, `SCANNING`, `BACKING_UP`, `ARRIVED`, `FAILED`
+- `NavEvent(step, kind, detail)` — `plan`, `replan`, `detect`, `no_path`,
+  state transitions
+- `NavigationSupervisor(grid, goal_cell, follower=None, detector=None,
+  scan_steps=30, scan_speed=1.0, backup_steps=20, backup_speed=-0.15,
+  stall_window=120, stall_distance=0.10)`
+  - `plan(pose)`, `replan(pose)`, `step(pose, scan, dt) -> Twist`
+  - `goal_reached`, `failed`, `recovering`, `path`, `events`, `plan_count`,
+    `replan_count`, `detected_cells`
+  - replans when a path cell is blocked; recovers by scanning, backing up, then
+    failing safely if no route appears
+- `nearest_free_cell(grid, cell, max_radius=12)` — ring search used to snap a
+  replan start out of a new obstacle's clearance
+
 ### Experiments
 - `scripts/phase1_demo.py` — straight line, rotation, integrator error table,
   circle and collision plots.
@@ -129,13 +156,18 @@ unexpected obstacles is Phase 6.
 - `scripts/phase5_demo.py` — drives the Phase 3 route on the particle-filter
   estimate under wheel-scale error, compares odometry and filter error, shows
   offset-prior recovery, saves `experiments/plots/phase5_localization.png`.
+- `scripts/phase6_demo.py` — drops a block on the route mid-run and compares
+  reactive navigation with a blind baseline; shows detection, replanning,
+  collisions and dynamic map growth, saves
+  `experiments/plots/phase6_recovery.png`.
 
 ### Documentation
 - `docs/mathematics.md` — pose conventions, forward/inverse kinematics,
   nonholonomic constraint, integrators, ICC, error measurements, occupancy
   grids, inflation, graph search, heuristic admissibility, PID, tracking, ray
   casting, odometry error, Bayes recursion, motion/measurement models,
-  likelihood fields, ESS and resampling.
+  likelihood fields, ESS, resampling, map-consistency detection, evidence
+  decay/hysteresis, clearance, replanning and the recovery state machine.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -143,7 +175,7 @@ unexpected obstacles is Phase 6.
 
 ## 3. Verified numbers
 
-- 161 tests pass.
+- 179 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -171,6 +203,13 @@ unexpected obstacles is Phase 6.
   - goal reached, zero collisions, 58.9 s, 99% RMS reduction
   - stationary recovery with a 1.1 m offset prior: passes from 0.45/0.22/0.07 m
     to 0.41/0.12/0.08 m for prior std 0.3/0.5/0.8 m
+- Phase 6 demo (29.17 m route, 20 Hz, 0.30 m inflation, 0.60 x 0.60 m block
+  injected at `t = 4.0 s`):
+  - reactive: goal reached, zero collisions, 58.8 s, final error `0.10 m`
+  - 56 detected cells, one replan at `t = 4.05 s`
+  - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
+  - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
+    collision
 
 ---
 
@@ -201,6 +240,7 @@ python scripts/phase2_demo.py
 python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
+python scripts/phase6_demo.py
 ```
 
 Repository workflow used so far:
@@ -217,8 +257,8 @@ Repository workflow used so far:
 
 1. **State estimation is local.** The filter tracks well from a known start but
    cannot recover from an arbitrarily wrong prior; capture range is set by the
-   initial particle spread. Global relocalization and recovery behaviours are
-   Phase 6.
+   initial particle spread. The Phase 6 recovery sequence handles blocked routes,
+   not a lost robot.
 2. **Grid paths cut visually close to corners.** Inflation gives clearance plus
    a conservative half-cell; the Phase 3 demo adds a 0.05 m planning margin
    because a lookahead controller cuts corners. Longer lookaheads need more
@@ -233,21 +273,25 @@ Repository workflow used so far:
 6. **Paths are dense.** The Phase 2 demo path has ~103 waypoints for 29 m. The
    follower does a linear nearest-point search each step, which is fine at this
    scale but would need a spatial index in a much larger map.
-7. **No dynamic replanning.** The grid is static; that is Phase 6.
-8. **No metrics module.** Tracking metrics live in the Phase 3 demo; a
-   reusable `evaluation/` module arrives in Phase 7.
+7. **Replanning reacts only to newly observed cells.** Paths are replanned when
+   the current route becomes blocked; moving objects are treated as static and
+   there is no tracking or prediction.
+8. **No metrics module.** Tracking and recovery metrics still live in the demo
+   scripts; a reusable `evaluation/` module is the proposed Phase 7.
 9. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
    there is no beam width, intensity, multipath or mixed-pixel model.
 10. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
     is independent Gaussian rather than range-dependent with outliers.
-11. **Scans are now fused into localization, but not into planning.** The filter
-    consumes `LidarScan`; the planner still uses a static map and never reacts
-    to unexpected obstacles.
+11. **Detection only adds observed surfaces.** Occluded parts of a new obstacle
+    stay unknown and the map is never repaired if the world changes elsewhere.
 12. **The likelihood is annealed.** `likelihood_scale = 0.2` keeps the cloud
     from collapsing but means the posterior is not calibrated and the reported
     particle spread underestimates true error.
 13. **Wheel scale error is constant.** There is no random slip, and the motion
     noise is an approximation of real encoder error.
+14. **The Phase 6 demo uses ground-truth pose** to isolate perception and
+    recovery. The supervisor accepts any pose source, but the combined
+    localization-plus-dynamic-map loop is not yet demonstrated end to end.
 
 ---
 
@@ -475,38 +519,70 @@ from the simulator.
 
 ---
 
-## 10. Phase 6 — Dynamic obstacles and recovery (next stage)
+## 10. Phase 6 — Dynamic obstacles and recovery (completed)
 
-**Goal:** react to the environment changing after planning, and recover when the
-robot is blocked or lost.
+**Outcome:** `DynamicObstacleMap`, `NavigationSupervisor` and `nearest_free_cell`
+are implemented. A block dropped on the route mid-run is detected from
+map-inconsistent LiDAR returns, confirmed with decaying evidence and a
+hysteresis pair, inflated by clearance, and avoided by a single A* replan. The
+reactive run reaches the goal with zero collisions while a blind baseline stops
+at the block. A sealed map exercises the scan/backup/fail branch, which ends in
+an explicit safe stop. Eighteen new tests cover detection, decay, clearance,
+replanning, stall handling, recovery and validation.
 
-Proposed scope:
-1. `src/atlas/perception/` — detect unexpected obstacles from LiDAR returns
-   against the known map (map-consistency / free-space violation checks).
-2. Local obstacle memory — mark newly seen occupied cells, with decay or
-   confirmation so a noisy return does not permanently poison the map.
-3. Replanning — re-run A* on the updated grid from the current estimate to the
-   unchanged goal; handle "no path" explicitly.
-4. Recovery behaviours — when progress stalls or the path is blocked: stop,
-   rotate/scan to gather information, attempt a short backup, then replan; if
-   still blocked, declare failure rather than collide.
-5. Tests: obstacle detection from synthetic scans, local map updates, replan
-   around a new block, no-path handling, stall detection, backup behaviour,
-   recovery determinism.
-6. `scripts/phase6_demo.py` — drive the Phase 5 loop, drop an obstacle on the
-   route mid-run, show detection, replanned path, recovery manoeuvre and final
-   outcome.
-7. Docs: map-consistency test, replanning trigger, recovery state machine,
-   failure modes.
+### Goal
+React to the environment changing after planning, and recover when the robot is
+blocked or lost.
 
-Acceptance: the robot detects a newly placed obstacle, replans without collision,
-and reaches the goal on the modified map while the Phase 5 localization demo
-still passes.
+### Implemented scope
+1. `src/atlas/perception/obstacle_detector.py` — map-consistency detection,
+   decaying per-cell evidence, confirmation/release hysteresis, clearance
+   growth, implicit world-wall handling and a copied planning grid.
+2. `src/atlas/recovery/supervisor.py` — path-blocked replanning, nearest-free
+   start snapping, stall detection, scan/backup/fail state machine and explicit
+   terminal `ARRIVED`/`FAILED` states.
+3. `tests/test_obstacle_detector.py` (8) and `tests/test_recovery.py` (10).
+4. `scripts/phase6_demo.py` — reactive vs blind comparison, detection curve and
+   dynamic map growth.
+5. Docs: map-consistency test, evidence recursion, hysteresis, clearance,
+   replanning and the recovery state machine.
+
+### Acceptance (met)
+- All prior tests still pass; total is 179.
+- The robot detects the new block, replans once and reaches the goal with zero
+  collisions (`0.10 m` final error).
+- A blocked or sealed map ends in `FAILED` with a zero command, never a
+  collision.
+- README, mathematics, design decisions and handoff updated to Phase 6.
 
 ---
 
-## 11. Working agreement
+## 11. Phase 7 — Evaluation and metrics (next stage)
 
-Keep the existing conventions and do not change Phase 0-5 behaviour; the
-current 161-test suite is the regression baseline. Commit implementation first,
+**Goal:** turn the per-phase demo metrics into a reusable evaluation harness and
+an aggregate benchmark, so changes can be compared on identical scenarios.
+
+Proposed scope:
+1. `src/atlas/evaluation/` — metrics objects for tracking (cross-track, heading,
+   final error, control effort), localization (position/heading RMS and max,
+   ESS), planning (cost, expanded cells, runtime) and navigation (success,
+   collisions, time, replans, detections).
+2. Scenario definitions — named worlds, start/goal pairs, obstacle injection
+   schedules and seeds, shared by tests, demos and the benchmark.
+3. `scripts/evaluate.py` — runs a scenario suite across seeds, prints aggregate
+   tables with mean/std/min/max, and supports JSON/CSV export.
+4. A smoke regression test asserting the aggregate metrics stay inside known
+   bounds.
+5. Docs: metric definitions, aggregation rules and how to add a scenario.
+
+Acceptance: the Phase 1-6 demos can all be expressed as scenarios, the suite
+runs from one command, results are reproducible across seeds, and the existing
+179-test baseline still passes without changing Phase 0-6 behaviour.
+
+---
+
+## 12. Working agreement
+
+Keep the existing conventions and do not change Phase 0-6 behaviour; the
+current 179-test suite is the regression baseline. Commit implementation first,
 docs and demo second, then push.
