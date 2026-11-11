@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 10 November 2026
+**Date:** 11 November 2026
 **Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 6 — dynamic obstacles and recovery
-**Tests:** 179 passing (`pytest`)
+**Latest work:** Phase 7 — evaluation and metrics
+**Tests:** 212 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -19,7 +19,8 @@
 | 4 | LiDAR simulation and range uncertainty | complete |
 | 5 | Odometry and particle-filter localization | complete |
 | 6 | Dynamic obstacles and recovery | complete |
-| 7 | Evaluation and metrics | next |
+| 7 | Evaluation and metrics | complete |
+| 8 | Integrated autonomy | next |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -30,8 +31,11 @@ planning.
 
 The navigation loop now detects LiDAR returns that disagree with the known map,
 grows a dynamic obstacle map, replans around confirmed obstacles, and falls back
-to a bounded scan/backup/fail recovery sequence. It still has no reusable
-evaluation harness or aggregate benchmark, which is the natural Phase 7.
+to a bounded scan/backup/fail recovery sequence. A reusable evaluation package
+scores kinematics, planning, tracking, localization and recovery on one set of
+scenarios across seeds, so regressions surface in a single command. The main
+remaining gap is that recovery is still driven by ground-truth pose; the
+estimate-driven supervisor is the natural Phase 8.
 
 ---
 
@@ -143,6 +147,27 @@ evaluation harness or aggregate benchmark, which is the natural Phase 7.
 - `nearest_free_cell(grid, cell, max_radius=12)` — ring search used to snap a
   replan start out of a new obstacle's clearance
 
+### Phase 7 — evaluation (`src/atlas/evaluation/`)
+- `metrics.py`
+  - `rms(values)`, `segment_projection(point, a, b)`,
+    `path_errors(path, poses)`
+  - `summarize(values) -> MetricSummary(count, mean, std, minimum, maximum)`
+  - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
+    `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`
+  - every dataclass has `as_dict()` returning a flat float/int dictionary;
+    aggregate summaries also expose `as_dict()`
+- `scenarios.py`
+  - `Scenario(name, kind, world, start, goal, resolution, inflation, dt,
+    max_steps, controller, yaw_bias, inject_step, inject_rect)` with validation
+  - `demo_world()` returns a fresh 20 x 20 world per run
+  - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
+- `harness.py`
+  - `ScenarioResult(scenario, seed, metrics)`
+  - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
+    `run_recovery`
+  - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
+  - `aggregate(results)` groups by scenario and summarizes each metric
+
 ### Experiments
 - `scripts/phase1_demo.py` — straight line, rotation, integrator error table,
   circle and collision plots.
@@ -160,6 +185,9 @@ evaluation harness or aggregate benchmark, which is the natural Phase 7.
   reactive navigation with a blind baseline; shows detection, replanning,
   collisions and dynamic map growth, saves
   `experiments/plots/phase6_recovery.png`.
+- `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
+  tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
+  `--list`).
 
 ### Documentation
 - `docs/mathematics.md` — pose conventions, forward/inverse kinematics,
@@ -167,7 +195,8 @@ evaluation harness or aggregate benchmark, which is the natural Phase 7.
   grids, inflation, graph search, heuristic admissibility, PID, tracking, ray
   casting, odometry error, Bayes recursion, motion/measurement models,
   likelihood fields, ESS, resampling, map-consistency detection, evidence
-  decay/hysteresis, clearance, replanning and the recovery state machine.
+  decay/hysteresis, clearance, replanning, the recovery state machine, scenario
+  design, tracking/localization/planning metrics, aggregation and determinism.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -175,7 +204,7 @@ evaluation harness or aggregate benchmark, which is the natural Phase 7.
 
 ## 3. Verified numbers
 
-- 179 tests pass.
+- 212 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -210,6 +239,20 @@ evaluation harness or aggregate benchmark, which is the natural Phase 7.
   - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
   - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
     collision
+- Phase 7 benchmark (6 scenarios, seeds 0-2, 18 runs, ~9.4 s):
+  - kinematics: Euler `2.10e-4 m`, midpoint `8.76e-7 m`, exact `6.27e-15 m`
+    over one circle
+  - planning: A* cost `29.021 m`, 103 waypoints, 1,074 vs 4,465 cells expanded
+    (**75.9% reduction**), identical cost to Dijkstra
+  - tracking: PID cross-track RMS `0.0258 m` vs P-only `0.0513 m`; PID final
+    error `0.0982 m`; no collisions
+  - localization: odometry position RMS `11.383 m` vs filter `0.0845 m`;
+    filter heading RMS `0.18 deg`; no collisions
+  - recovery: reached, zero collisions, one replan, 56 detected cells,
+    `0.0987 m` final error
+  - deterministic metrics repeat to floating-point precision (aggregate std at
+    most ~1e-17); wall-clock planner times vary and are not part of the
+    reproducibility claim
 
 ---
 
@@ -241,6 +284,7 @@ python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
+python scripts/evaluate.py
 ```
 
 Repository workflow used so far:
@@ -276,20 +320,25 @@ Repository workflow used so far:
 7. **Replanning reacts only to newly observed cells.** Paths are replanned when
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
-8. **No metrics module.** Tracking and recovery metrics still live in the demo
-   scripts; a reusable `evaluation/` module is the proposed Phase 7.
-9. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
-   there is no beam width, intensity, multipath or mixed-pixel model.
-10. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
+8. **The evaluation suite is deliberately small.** One map, one route, five
+   scenario kinds and three seeds. It is a regression harness, not a broad
+   robotics benchmark; aggregation reports descriptive statistics only.
+9. **Demos and the harness are separate.** The Phase 1-6 scripts remain
+   narrative experiments with plots and do not call `evaluation/`. A change to a
+   shared component should run both, because the harness will not catch a
+   plotting or narrative regression.
+10. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
+    there is no beam width, intensity, multipath or mixed-pixel model.
+11. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
     is independent Gaussian rather than range-dependent with outliers.
-11. **Detection only adds observed surfaces.** Occluded parts of a new obstacle
+12. **Detection only adds observed surfaces.** Occluded parts of a new obstacle
     stay unknown and the map is never repaired if the world changes elsewhere.
-12. **The likelihood is annealed.** `likelihood_scale = 0.2` keeps the cloud
+13. **The likelihood is annealed.** `likelihood_scale = 0.2` keeps the cloud
     from collapsing but means the posterior is not calibrated and the reported
     particle spread underestimates true error.
-13. **Wheel scale error is constant.** There is no random slip, and the motion
+14. **Wheel scale error is constant.** There is no random slip, and the motion
     noise is an approximation of real encoder error.
-14. **The Phase 6 demo uses ground-truth pose** to isolate perception and
+15. **The Phase 6 demo uses ground-truth pose** to isolate perception and
     recovery. The supervisor accepts any pose source, but the combined
     localization-plus-dynamic-map loop is not yet demonstrated end to end.
 
@@ -557,32 +606,74 @@ blocked or lost.
 
 ---
 
-## 11. Phase 7 — Evaluation and metrics (next stage)
+## 11. Phase 7 — Evaluation and metrics (completed)
 
-**Goal:** turn the per-phase demo metrics into a reusable evaluation harness and
-an aggregate benchmark, so changes can be compared on identical scenarios.
+**Outcome:** `src/atlas/evaluation/` provides metric functions, typed metric
+objects, a validated scenario registry, five runners, suite execution and
+cross-seed aggregation. `scripts/evaluate.py` runs the full suite (6 scenarios x
+3 seeds, 18 runs) in about 9.4 s and exports JSON/CSV. Thirty-three new tests
+cover the metric maths, scenario validation, each runner, reproducibility and
+aggregation. The harness reproduces the Phase 3, 5 and 6 headline numbers.
 
-Proposed scope:
-1. `src/atlas/evaluation/` — metrics objects for tracking (cross-track, heading,
-   final error, control effort), localization (position/heading RMS and max,
-   ESS), planning (cost, expanded cells, runtime) and navigation (success,
-   collisions, time, replans, detections).
-2. Scenario definitions — named worlds, start/goal pairs, obstacle injection
-   schedules and seeds, shared by tests, demos and the benchmark.
-3. `scripts/evaluate.py` — runs a scenario suite across seeds, prints aggregate
-   tables with mean/std/min/max, and supports JSON/CSV export.
-4. A smoke regression test asserting the aggregate metrics stay inside known
-   bounds.
-5. Docs: metric definitions, aggregation rules and how to add a scenario.
+### Goal
+Turn the per-phase demo metrics into a reusable evaluation harness and an
+aggregate benchmark, so changes can be compared on identical scenarios.
 
-Acceptance: the Phase 1-6 demos can all be expressed as scenarios, the suite
-runs from one command, results are reproducible across seeds, and the existing
-179-test baseline still passes without changing Phase 0-6 behaviour.
+### Implemented scope
+1. `metrics.py` — `rms`, nearest-segment projection, cross-track and wrapped
+   heading errors, `summarize` with sample standard deviation, and five metric
+   dataclasses with flat `as_dict()` output.
+2. `scenarios.py` — world factories, six named scenarios (`kinematics`,
+   `planning`, `tracking_pid`, `tracking_p`, `localization`, `recovery`) and
+   validation for every field, including the paired injection arguments.
+3. `harness.py` — one runner per scenario kind, a dispatcher, `run_suite`, and
+   `aggregate` producing mean/std/min/max per metric.
+4. `scripts/evaluate.py` — aggregate tables plus `--scenario`, `--seeds`,
+   `--json`, `--csv` and `--list`.
+5. `tests/test_metrics.py` (14) and `tests/test_evaluation.py` (19).
+6. Docs: scenario model, metric derivations, aggregation, determinism,
+   measured results and limitations.
+
+### Acceptance (met)
+- All prior tests still pass; total is 212.
+- Every Phase 1-6 experiment is expressible as a scenario; one command runs the
+  suite.
+- Seeded runs are reproducible; deterministic metrics repeat exactly.
+- Phase 0-6 behaviour is unchanged.
+
+### Measured results
+See section 3. Headlines: exact integration `6e-15 m`, A* 75.9% fewer expansions
+than Dijkstra at identical cost, PID cross-track `0.0258 m` vs P-only `0.0513 m`,
+filter RMS `0.0845 m` vs odometry `11.383 m`, recovery reaches the goal with zero
+collisions and one replan.
 
 ---
 
-## 12. Working agreement
+## 12. Phase 8 — Integrated autonomy (next stage)
 
-Keep the existing conventions and do not change Phase 0-6 behaviour; the
-current 179-test suite is the regression baseline. Commit implementation first,
+**Goal:** run the whole loop on the estimate and the live map, rather than
+proving each subsystem separately on ground truth.
+
+Proposed scope:
+1. Drive the supervisor from the **particle-filter estimate** in the recovery
+   scenario, so localization, detection, replanning and control close the loop.
+2. Score new obstacle cells against the **filter's current belief** rather than
+   the known map alone, reducing false detections when the pose is uncertain.
+3. Introduce a measured **localization failure** (kidnapped robot or a long
+   featureless corridor) and add a relocalization behaviour to the supervisor.
+4. Report end-to-end metrics per phase: estimate error, detection latency,
+   replans, collisions and goal success, using the Phase 7 harness.
+5. Add an integrated scenario to the suite so the estimate-driven loop is a
+   regression target, not only a demo.
+
+Acceptance: the combined loop reaches the goal with zero collisions in the
+recovery scenario using only estimated pose, the 212-test baseline still passes,
+and the new scenario is reproducible across seeds.
+
+---
+
+## 13. Working agreement
+
+Keep the existing conventions and do not change Phase 0-7 behaviour; the
+current 212-test suite is the regression baseline. Commit implementation first,
 docs and demo second, then push.

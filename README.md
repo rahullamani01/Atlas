@@ -14,15 +14,14 @@ project in Python (motion model, planning, control, sensing, localization).
 | 4 | LiDAR simulation and range uncertainty | complete |
 | 5 | Odometry and particle-filter localization | complete |
 | 6 | Dynamic obstacles and recovery | complete |
-| 7 | Evaluation and metrics | next |
+| 7 | Evaluation and metrics | complete |
 
-Phase 6 makes the navigation loop react to the world changing after planning.
-LiDAR returns that disagree with the known map accumulate evidence in a dynamic
-obstacle map, confirmed cells are inflated for clearance, and A* replans around
-them. In the demo a block is dropped on the route mid-run: the reactive robot
-detects it, replans once and reaches the goal with zero collisions, while a
-blind baseline follows the stale path and stops at the block. A no-route branch
-scans, backs up and reports failure instead of driving into a known obstacle.
+Phase 7 turns the per-phase demo measurements into a reusable evaluation package
+and one aggregate benchmark. Six scenarios (kinematics, planning, PID and P-only
+tracking, localization, recovery) run across several seeds and report mean,
+standard deviation, minimum and maximum for every metric. The harness reproduces
+the Phase 3, 5 and 6 numbers rather than redefining them, so a change that
+regresses tracking, localization or recovery shows up in one command.
 
 ## Layout
 
@@ -47,20 +46,25 @@ src/atlas/
 │   └── obstacle_detector.py     # map-inconsistent returns, evidence, clearance
 ├── recovery/
 │   └── supervisor.py            # replanning and the recovery state machine
+├── evaluation/
+│   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
+│   ├── scenarios.py             # named scenario registry and validation
+│   └── harness.py               # runners, suite execution, aggregation
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 179 tests across geometry, motion, planning, control, sensing, localization, perception, recovery
+tests/                           # 212 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, evaluation
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
 ├── phase3_demo.py               # P-only vs PID closed-loop tracking
 ├── phase4_demo.py               # LiDAR scans at four poses, clean vs noisy
 ├── phase5_demo.py               # odometry vs particle-filter localization
-└── phase6_demo.py               # reactive vs blind navigation with a new obstacle
+├── phase6_demo.py               # reactive vs blind navigation with a new obstacle
+└── evaluate.py                  # Phase 7 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, evaluation
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -82,6 +86,7 @@ python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
+python scripts/evaluate.py
 ```
 
 - **Phase 1:** straight line, in-place rotation, and integration error against
@@ -104,6 +109,10 @@ python scripts/phase6_demo.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
+- **Phase 7:** runs all six scenarios over several seeds and prints aggregate
+  tables (mean/std/min/max) for kinematics, planning, tracking, localization and
+  recovery. `--scenario`, `--seeds`, `--json` and `--csv` select subsets and
+  export results.
 
 ## Motion model in brief
 
@@ -217,6 +226,25 @@ while not (supervisor.goal_reached or supervisor.failed):
 print(supervisor.state, supervisor.replan_count, len(supervisor.detected_cells))
 # a scan/backup recovery ends in NavState.FAILED with a zero command,
 # never in a collision
+```
+
+## Evaluation in brief
+
+```python
+from atlas.evaluation import aggregate, get_scenario, run_suite
+
+# Six scenarios, three seeds: 18 runs, no shared mutable state between runs.
+results = run_suite(seeds=(0, 1, 2))
+summary = aggregate(results)
+
+print(summary["tracking_pid"]["cross_track_rms"].mean)
+print(summary["localization"]["filter_rms"].as_dict())
+# {'count': 3, 'mean': 0.0845, 'std': 0.0004, ...}
+```
+
+```bash
+python scripts/evaluate.py --scenario planning --seeds 0 1 2
+python scripts/evaluate.py --json experiments/results/phase7_metrics.json
 ```
 
 Full derivations, error analysis and assumptions are in

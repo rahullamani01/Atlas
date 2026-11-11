@@ -924,3 +924,176 @@ several scans as evidence accumulates.
 8. A newly confirmed obstacle is inflated by a fixed clearance; very tight
    corridors can therefore be declared impassable even when a smaller robot
    could pass.
+
+---
+
+## 16. Evaluation and metrics (Phase 7)
+
+### 16.1 Scenarios as descriptions
+
+An experiment is described by a `Scenario` dataclass: a world **factory**, start
+and goal points, resolution, inflation, timestep, step cap, controller choice, a
+yaw disturbance, and an optional mid-run obstacle injection. The world is a
+factory rather than a shared object so each run starts from the same map and an
+injected obstacle cannot leak into the next seed.
+
+Two kinds of scenario are deliberately mixed:
+
+- **Deterministic** — kinematics and planning do not consume a seed. Repeating
+  them is expected to produce identical metrics apart from wall-clock time.
+- **Stochastic** — localization and recovery use the seed for LiDAR range noise
+  and (where present) particle-filter sampling. Aggregation across seeds is what
+  exposes run-to-run spread.
+
+The suite prints every scenario with the same aggregation table, so a change in
+one layer cannot quietly use different reporting rules.
+
+### 16.2 Tracking metrics
+
+Let the planned route be the polyline `P = (p_0, ..., p_n)` and a driven pose be
+`q = (x, y, theta)`. For each segment `(a, b)` the projection parameter is
+
+```text
+t* = clamp( ((q - a) . (b - a)) / ||b - a||^2,  0, 1 )
+```
+
+and the cross-track distance is
+
+```text
+d(q) = || q - (a + t* (b - a)) ||
+```
+
+The segment heading is `psi = atan2(b_y - a_y, b_x - a_x)`, so the heading error
+is `wrap(psi - theta)`. A pose is scored against the segment with the smallest
+`d`. Over `N` samples:
+
+```text
+cross-track RMS = sqrt( (1/N) sum_i d_i^2 )
+cross-track max = max_i d_i
+heading RMS     = sqrt( (1/N) sum_i wrap(psi_i - theta_i)^2 )
+```
+
+The remaining tracking metrics are:
+
+- **final error** — Euclidean distance from the last pose to the route goal.
+- **control effort** — `sum |w_i| dt`, the total commanded rotation.
+- **driven length** — arc length of the logged pose sequence.
+- **duration** — simulated time, `steps * dt`, not wall-clock time.
+- **collisions / reached** — simulator collision count and follower success.
+
+Cross-track error is only meaningful for non-self-intersecting routes; a route
+that crosses itself makes "nearest segment" ambiguous.
+
+### 16.3 Localization metrics
+
+At each step, with ground-truth pose `p_t` and estimates `p_hat_t` from the
+particle filter and from raw odometry:
+
+```text
+e_t = || p_hat_t - p_t ||_2
+position RMS = sqrt( (1/N) sum_t e_t^2 )
+position max = max_t e_t
+heading RMS  = degrees( sqrt( (1/N) sum_t wrap(theta_hat_t - theta_t)^2 ) )
+```
+
+The odometry and filter metrics are computed over the **same** steps and the
+same commanded motion, so the comparison isolates the measurement update rather
+than a different route or controller.
+
+### 16.4 Planning metrics
+
+The runner computes both searches on the same inflated grid and reports:
+
+```text
+path cost [m]        = A* cost * resolution
+waypoints            = len(A* path)
+expansion reduction  = 1 - expanded(A*) / expanded(Dijkstra)
+```
+
+The runner raises if A* and Dijkstra disagree on cost, which would indicate an
+inadmissible or inconsistent heuristic. Wall-clock milliseconds are reported for
+the Phase 2 comparison but are machine-dependent and excluded from the
+reproducibility claim.
+
+### 16.5 Aggregation across seeds
+
+For metric values `x_1, ..., x_n` the benchmark reports
+
+```text
+mean = (1/n) sum x_i
+std  = sqrt( (1/(n-1)) sum (x_i - mean)^2 )      (n > 1)
+min, max
+```
+
+The standard deviation uses `ddof = 1`, so it estimates the spread of the
+run-to-run distribution rather than describing only the sampled values. With a
+single seed it is reported as zero. These are descriptive statistics over a
+small sample: they are not confidence intervals and no significance test is
+applied.
+
+### 16.6 Determinism
+
+Given the same scenario and seed, a run must produce identical metrics. This is
+achieved by:
+
+1. constructing a fresh world per run;
+2. seeding the LiDAR and the particle filter from the scenario seed;
+3. keeping wall-clock time out of the primary metrics.
+
+The recovery injection is applied at a fixed control step, so the same run
+receives the same obstacle at the same simulated time. The tracking scenario is
+deterministic even under the injected yaw bias because the simulator and
+controller have no random terms.
+
+### 16.7 Measured behaviour
+
+Full suite, three seeds (0, 1, 2), 18 runs, about 9.4 s on the development
+machine:
+
+| Scenario | Headline metric | Mean | Std |
+|---|---|---:|---:|
+| kinematics | Euler error over one circle [m] | 2.10e-4 | 0 |
+| | midpoint error [m] | 8.76e-7 | 0 |
+| | exact error [m] | 6.27e-15 | 0 |
+| planning | A* cost [m] | 29.021 | 0 |
+| | waypoints | 103 | 0 |
+| | cells expanded (A* / Dijkstra) | 1074 / 4465 | 0 |
+| | expansion reduction | 75.9% | 0 |
+| tracking, P-only | cross-track RMS [m] | 0.0513 | 0 |
+| tracking, PID | cross-track RMS [m] | **0.0258** | 0 |
+| | final error [m] | 0.0982 | 0 |
+| | collisions | 0 | 0 |
+| localization | odometry position RMS [m] | 11.383 | 0.010 |
+| | filter position RMS [m] | **0.0845** | 0.0004 |
+| | filter heading RMS [deg] | 0.181 | 0.005 |
+| | collisions | 0 | 0 |
+| recovery | reached | 1.0 | 0 |
+| | collisions | 0 | 0 |
+| | replans | 1 | 0 |
+| | detected cells | 56 | 0 |
+| | final error [m] | 0.0987 | 0 |
+
+The PID cross-track result reproduces the Phase 3 demo, and the localization and
+recovery results reproduce the Phase 5 and Phase 6 demos. The harness therefore
+agrees with the narrative experiments rather than replacing them with a second,
+divergent implementation.
+
+### 16.8 Limitations
+
+1. The suite is small: one map, one route, five scenario kinds and three seeds.
+   It is a regression harness, not a broad robotics benchmark.
+2. Aggregation reports descriptive statistics only. There are no confidence
+   intervals, paired tests or effect sizes.
+3. Cross-track error uses nearest-segment projection, which is ambiguous for
+   self-intersecting routes.
+4. Wall-clock timings depend on the machine and are excluded from the
+   reproducibility claim.
+5. Recovery is still evaluated on ground-truth pose. The estimate-driven
+   supervisor is proposed Phase 8.
+6. Collision count is binary per run; the metrics do not record minimum
+   clearance, jerk, comfort or actuator saturation.
+7. Seeds are varied for stochastic components, but the map and start pose are
+   fixed, so map uncertainty is not represented.
+8. The per-phase demo scripts remain narrative experiments. They share the same
+   underlying components but do not call the harness, so a future change could
+   drift unless both are run.

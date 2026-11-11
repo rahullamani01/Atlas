@@ -65,8 +65,8 @@
   inflated obstacles.
 - The Phase 3 demo injects a constant 0.2 rad/s wheel bias to expose integral
   action. This is an experiment-only disturbance, not a simulator feature.
-- Tracking metrics are computed in the experiment script. A reusable
-  `evaluation/` module is deferred to Phase 7.
+- Tracking metrics are computed in the experiment script; the reusable
+  `evaluation/` module now provides the same definitions for the harness.
 
 ## Sensors (Phase 4)
 
@@ -162,3 +162,47 @@
   known obstacles. Earlier phases keep their original settings.
 - The blind baseline is intentional: it shows the cost of ignoring perception,
   not a supported operating mode.
+
+## Evaluation and metrics (Phase 7)
+
+- Scenarios are **descriptions**, not stateful runs. Each one carries a world
+  factory, start/goal, resolution, inflation, timestep and step cap, so every
+  seed gets a fresh map. Injecting an obstacle into one run cannot leak into the
+  next.
+- The world is a callable rather than a `World` instance. Sharing a mutable
+  world would make seed order matter and would quietly change the map after the
+  first recovery run.
+- Runners are plain functions (`run_kinematics`, `run_planning`, `run_tracking`,
+  `run_localization`, `run_recovery`) dispatched by `run_scenario`. Adding a
+  new experiment means adding a function and a registry entry, not editing a
+  monolithic benchmark script.
+- Metrics are **flat dictionaries of floats and ints**. This keeps JSON/CSV
+  export trivial and lets aggregation treat every metric uniformly, at the cost
+  of losing type information at the boundary. Typed dataclasses build the
+  dictionary; they are not the storage format.
+- Ground truth is passed into the metric functions by the caller. `evaluation/`
+  never reads simulator internals, so the same code scores a demo, a unit test
+  or a future hardware log.
+- Cross-track distance uses nearest-segment projection with the parameter
+  clamped to `[0, 1]`. A pose beyond either end is scored against that endpoint
+  rather than an extrapolated line. This is only meaningful for routes that do
+  not cross themselves.
+- Aggregation uses mean, sample standard deviation (`ddof = 1`), minimum and
+  maximum. These are descriptive statistics over a handful of seeds; no
+  confidence interval or significance test is claimed.
+- Wall-clock milliseconds are reported for the planner comparison but excluded
+  from the reproducibility claim. Only simulated time, counts and geometric
+  errors are expected to repeat, and those repeat only to floating-point
+  precision.
+- Deterministic scenarios (kinematics, planning, tracking) ignore the seed.
+  Stochastic ones (localization, recovery) seed the LiDAR and, where present,
+  the particle filter. The benchmark repeats every scenario for every seed
+  regardless, so one table shape covers both kinds.
+- The harness deliberately reproduces the Phase 3/5/6 numbers instead of
+  replacing them. The demo scripts remain narrative experiments with plots and
+  printed comparisons; `scripts/evaluate.py` is the aggregate regression layer.
+  Both must be run when a shared component changes, which is recorded as a
+  known limitation.
+- The recovery scenario is still evaluated on ground-truth pose. Feeding it the
+  particle-filter estimate is the proposed Phase 8 integrated-autonomy step, not
+  a change to this phase.
