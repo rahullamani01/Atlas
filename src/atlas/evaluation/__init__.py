@@ -1,0 +1,56 @@
+"""Evaluation metrics, scenarios and benchmark runners (Phase 7)."""
+from atlas.evaluation.harness import (
+    ScenarioResult,
+    aggregate,
+    run_kinematics,
+    run_localization,
+    run_planning,
+    run_recovery,
+    run_scenario,
+    run_suite,
+    run_tracking,
+)
+from atlas.evaluation.metrics import (
+    KinematicsMetrics,
+    LocalizationMetrics,
+    MetricSummary,
+    NavigationMetrics,
+    PlanningMetrics,
+    TrackingMetrics,
+    path_errors,
+    rms,
+    segment_projection,
+    summarize,
+)
+from atlas.evaluation.scenarios import (
+    SCENARIOS,
+    Scenario,
+    default_scenarios,
+    get_scenario,
+)
+
+__all__ = [
+    "SCENARIOS",
+    "KinematicsMetrics",
+    "LocalizationMetrics",
+    "MetricSummary",
+    "NavigationMetrics",
+    "PlanningMetrics",
+    "Scenario",
+    "ScenarioResult",
+    "TrackingMetrics",
+    "aggregate",
+    "default_scenarios",
+    "get_scenario",
+    "path_errors",
+    "rms",
+    "run_kinematics",
+    "run_localization",
+    "run_planning",
+    "run_recovery",
+    "run_scenario",
+    "run_suite",
+    "run_tracking",
+    "segment_projection",
+    "summarize",
+]
