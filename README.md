@@ -15,13 +15,16 @@ project in Python (motion model, planning, control, sensing, localization).
 | 5 | Odometry and particle-filter localization | complete |
 | 6 | Dynamic obstacles and recovery | complete |
 | 7 | Evaluation and metrics | complete |
+| 8 | Integrated autonomy | complete |
+| 9 | Optional extensions | proposed |
 
-Phase 7 turns the per-phase demo measurements into a reusable evaluation package
-and one aggregate benchmark. Six scenarios (kinematics, planning, PID and P-only
-tracking, localization, recovery) run across several seeds and report mean,
-standard deviation, minimum and maximum for every metric. The harness reproduces
-the Phase 3, 5 and 6 numbers rather than redefining them, so a change that
-regresses tracking, localization or recovery shows up in one command.
+Phase 8 closes the loop on the estimated pose. The particle filter drives the
+supervisor, and the same estimate interprets LiDAR returns against the dynamic
+map, so localization, detection, replanning and control run together. In the
+integrated scenario the robot detects a new block, replans once and reaches the
+goal with zero collisions, `0.091 m` filter RMS and `0.06 m` final error. The
+core navigation roadmap is complete; the optional next step is relocalization
+after a kidnapped-robot event.
 
 ## Layout
 
@@ -49,11 +52,11 @@ src/atlas/
 ├── evaluation/
 │   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
 │   ├── scenarios.py             # named scenario registry and validation
-│   └── harness.py               # runners, suite execution, aggregation
+│   └── harness.py               # runners, integrated trace, suite execution, aggregation
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 212 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, evaluation
+tests/                           # 217 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, integration, evaluation
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
@@ -61,10 +64,11 @@ scripts/
 ├── phase4_demo.py               # LiDAR scans at four poses, clean vs noisy
 ├── phase5_demo.py               # odometry vs particle-filter localization
 ├── phase6_demo.py               # reactive vs blind navigation with a new obstacle
-└── evaluate.py                  # Phase 7 scenario suite with JSON/CSV export
+├── phase8_demo.py               # estimate-driven detection, replanning and recovery
+└── evaluate.py                  # Phase 7-8 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, evaluation
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, evaluation
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -86,6 +90,7 @@ python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
+python scripts/phase8_demo.py
 python scripts/evaluate.py
 ```
 
@@ -109,10 +114,14 @@ python scripts/evaluate.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
-- **Phase 7:** runs all six scenarios over several seeds and prints aggregate
-  tables (mean/std/min/max) for kinematics, planning, tracking, localization and
-  recovery. `--scenario`, `--seeds`, `--json` and `--csv` select subsets and
-  export results.
+- **Phase 7:** runs all seven scenarios over several seeds and prints aggregate
+  tables (mean/std/min/max) for kinematics, planning, tracking, localization,
+  recovery and integrated autonomy. `--scenario`, `--seeds`, `--json` and
+  `--csv` select subsets and export results.
+- **Phase 8:** runs the recovery scenario on the particle-filter estimate and
+  the live dynamic map. Compares against the ground-truth run, reports filter
+  error, collisions, replans and detection, and shows the map growing. Plot:
+  `experiments/plots/phase8_integrated.png`.
 
 ## Motion model in brief
 
@@ -228,12 +237,29 @@ print(supervisor.state, supervisor.replan_count, len(supervisor.detected_cells))
 # never in a collision
 ```
 
+## Integrated autonomy in brief
+
+```python
+from atlas.evaluation import get_scenario, simulate_integrated
+
+trace = simulate_integrated(get_scenario("integrated"), seed=0)
+
+print(trace.metrics.reached, trace.metrics.collisions)
+print(trace.metrics.filter_rms, trace.metrics.replans)
+# 1.0 0
+# 0.0907 1
+```
+
+The trace also contains the trajectory, per-step odometry/filter errors, the
+detected cells and the supervisor events, so the same run can be plotted or
+scored without a second implementation.
+
 ## Evaluation in brief
 
 ```python
 from atlas.evaluation import aggregate, get_scenario, run_suite
 
-# Six scenarios, three seeds: 18 runs, no shared mutable state between runs.
+# Seven scenarios, three seeds: 21 runs, no shared mutable state between runs.
 results = run_suite(seeds=(0, 1, 2))
 summary = aggregate(results)
 

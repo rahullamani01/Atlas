@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 11 November 2026
+**Date:** 12 November 2026
 **Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 7 — evaluation and metrics
-**Tests:** 212 passing (`pytest`)
+**Latest work:** Phase 8 — integrated autonomy
+**Tests:** 217 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -20,7 +20,8 @@
 | 5 | Odometry and particle-filter localization | complete |
 | 6 | Dynamic obstacles and recovery | complete |
 | 7 | Evaluation and metrics | complete |
-| 8 | Integrated autonomy | next |
+| 8 | Integrated autonomy | complete |
+| 9 | Optional extensions (relocalization) | proposed |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -29,13 +30,15 @@ surrounding geometry with a simulated 2D LiDAR, estimate its own pose by fusing
 wheel odometry with those scans, and react when the world changes after
 planning.
 
-The navigation loop now detects LiDAR returns that disagree with the known map,
+The navigation loop detects LiDAR returns that disagree with the known map,
 grows a dynamic obstacle map, replans around confirmed obstacles, and falls back
 to a bounded scan/backup/fail recovery sequence. A reusable evaluation package
-scores kinematics, planning, tracking, localization and recovery on one set of
-scenarios across seeds, so regressions surface in a single command. The main
-remaining gap is that recovery is still driven by ground-truth pose; the
-estimate-driven supervisor is the natural Phase 8.
+scores kinematics, planning, tracking, localization, recovery and integrated
+autonomy on one set of scenarios across seeds, so regressions surface in a
+single command. The loop is now closed: the particle-filter estimate drives the
+supervisor and the detector, and ground truth is used only to score error.
+The core roadmap is complete; the optional next step is relocalization after a
+kidnapped-robot event.
 
 ---
 
@@ -97,6 +100,8 @@ estimate-driven supervisor is the natural Phase 8.
 - `LidarScan(ranges, angles, world_angles, origin, max_range)`
   - `hit_mask`, `hits`, `ray_count`
   - `points()` returns world-space hit points
+  - `points_at(pose)` rebuilds the hit points as if the scan were taken at
+    `pose`, keeping the measured ranges and body-frame angles (Phase 8)
   - a miss is exactly `max_range`, never `inf`/NaN
 - Seeded Gaussian range noise on finite hits, clipped to sensor range
 - `LidarScan.body_origin` records the mount offset used by the localization
@@ -127,12 +132,15 @@ estimate-driven supervisor is the natural Phase 8.
 - `DynamicObstacleMap(known_grid, confirm_threshold=2.0, unblock_threshold=0.5,
   decay=0.8, tolerance=1, clearance=0.25)`
   - owns a copy of the planning grid; never mutates `known_grid`
-  - `integrate(scan) -> list[Cell]` returns cells that became blocked
+  - `integrate(scan, pose=None) -> list[Cell]` returns cells that became
+    blocked; `pose` interprets the scan at an estimated sensor pose (Phase 8)
   - `evidence` accumulates map-inconsistent returns and decays each update
   - `confirmed` uses hysteresis; `dynamic` is the inflated confirmed footprint
   - `grid` is the known map plus the dynamic footprint
   - `reset()`, `detected_count`
-  - outer cell ring and known obstacles with a one-cell tolerance are ignored
+  - known obstacles with a one-cell tolerance are ignored, and a
+    `tolerance + 1` cell band along every world edge is treated as known so
+    pose error does not turn wall returns into false detections
 - `NavState` — `DRIVING`, `SCANNING`, `BACKING_UP`, `ARRIVED`, `FAILED`
 - `NavEvent(step, kind, detail)` — `plan`, `replan`, `detect`, `no_path`,
   state transitions
@@ -153,7 +161,8 @@ estimate-driven supervisor is the natural Phase 8.
     `path_errors(path, poses)`
   - `summarize(values) -> MetricSummary(count, mean, std, minimum, maximum)`
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
-    `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`
+    `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
+    `IntegratedMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
@@ -161,10 +170,16 @@ estimate-driven supervisor is the natural Phase 8.
     max_steps, controller, yaw_bias, inject_step, inject_rect)` with validation
   - `demo_world()` returns a fresh 20 x 20 world per run
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
+  - seven scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+    `localization`, `recovery`, `integrated`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
-    `run_recovery`
+    `run_recovery`, `run_integrated`
+  - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
+    returns the trajectory, per-step odometry/filter/heading errors, detection
+    counts, supervisor events and detected cells; the benchmark runner and the
+    Phase 8 demo both consume it
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -185,6 +200,10 @@ estimate-driven supervisor is the natural Phase 8.
   reactive navigation with a blind baseline; shows detection, replanning,
   collisions and dynamic map growth, saves
   `experiments/plots/phase6_recovery.png`.
+- `scripts/phase8_demo.py` — runs the same scenario on the particle-filter
+  estimate with estimate-frame detection, compares it against the ground-truth
+  recovery run, plots the route, localization error and map growth, and saves
+  `experiments/plots/phase8_integrated.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -196,7 +215,9 @@ estimate-driven supervisor is the natural Phase 8.
   casting, odometry error, Bayes recursion, motion/measurement models,
   likelihood fields, ESS, resampling, map-consistency detection, evidence
   decay/hysteresis, clearance, replanning, the recovery state machine, scenario
-  design, tracking/localization/planning metrics, aggregation and determinism.
+  design, tracking/localization/planning metrics, aggregation, determinism and
+  the Phase 8 integrated loop (estimate-frame projection, boundary band,
+  integrated metrics).
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -204,7 +225,7 @@ estimate-driven supervisor is the natural Phase 8.
 
 ## 3. Verified numbers
 
-- 212 tests pass.
+- 217 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -239,7 +260,7 @@ estimate-driven supervisor is the natural Phase 8.
   - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
   - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
     collision
-- Phase 7 benchmark (6 scenarios, seeds 0-2, 18 runs, ~9.4 s):
+- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs):
   - kinematics: Euler `2.10e-4 m`, midpoint `8.76e-7 m`, exact `6.27e-15 m`
     over one circle
   - planning: A* cost `29.021 m`, 103 waypoints, 1,074 vs 4,465 cells expanded
@@ -250,6 +271,10 @@ estimate-driven supervisor is the natural Phase 8.
     filter heading RMS `0.18 deg`; no collisions
   - recovery: reached, zero collisions, one replan, 56 detected cells,
     `0.0987 m` final error
+  - integrated: reached, zero collisions, one replan, `59.03 ± 0.03 s`,
+    `0.0608 ± 0.0044 m` final error, `65.7 ± 2.9` detected cells, filter
+    position RMS `0.0915 ± 0.0008 m` (max `0.136 ± 0.011 m`) against odometry
+    `11.301 ± 0.006 m`, heading RMS `0.617 ± 0.007 deg`
   - deterministic metrics repeat to floating-point precision (aggregate std at
     most ~1e-17); wall-clock planner times vary and are not part of the
     reproducibility claim
@@ -284,6 +309,7 @@ python scripts/phase3_demo.py
 python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
+python scripts/phase8_demo.py
 python scripts/evaluate.py
 ```
 
@@ -320,13 +346,16 @@ Repository workflow used so far:
 7. **Replanning reacts only to newly observed cells.** Paths are replanned when
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
-8. **The evaluation suite is deliberately small.** One map, one route, five
-   scenario kinds and three seeds. It is a regression harness, not a broad
-   robotics benchmark; aggregation reports descriptive statistics only.
-9. **Demos and the harness are separate.** The Phase 1-6 scripts remain
-   narrative experiments with plots and do not call `evaluation/`. A change to a
-   shared component should run both, because the harness will not catch a
-   plotting or narrative regression.
+8. **The evaluation suite is deliberately small.** One map, one route, six
+   scenario kinds, seven scenarios and three seeds. It is a regression harness,
+   not a broad robotics benchmark; aggregation reports descriptive statistics
+   only.
+9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
+   narrative experiments with plots and do not call `evaluation/`. Phase 8 is
+   the exception: `scripts/phase8_demo.py` and `run_integrated` both use
+   `simulate_integrated`, so the plotted and scored runs cannot drift. A change
+   to a shared component should still run both, because the older harness runs
+   will not catch a plotting or narrative regression.
 10. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
     there is no beam width, intensity, multipath or mixed-pixel model.
 11. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
@@ -338,9 +367,19 @@ Repository workflow used so far:
     particle spread underestimates true error.
 14. **Wheel scale error is constant.** There is no random slip, and the motion
     noise is an approximation of real encoder error.
-15. **The Phase 6 demo uses ground-truth pose** to isolate perception and
-    recovery. The supervisor accepts any pose source, but the combined
-    localization-plus-dynamic-map loop is not yet demonstrated end to end.
+15. **The Phase 6 demo still uses ground-truth pose** to isolate perception and
+    recovery. Phase 8 closes that gap with `integrated`, which drives the same
+    supervisor from the particle-filter estimate.
+16. **The integrated filter still scores against the static map.** The dynamic
+    map feeds planning and detection, not the measurement likelihood. A
+    prototype that rebuilt the likelihood field from the dynamic map made filter
+    RMS slightly worse in this scenario, so it was not adopted.
+17. **The boundary band is geometric, not covariance-aware.** A fixed
+    `tolerance + 1` cell band along world edges suppresses false detections from
+    pose error, at the cost of sensitivity near walls. Detection tolerance is
+    likewise fixed rather than derived from particle spread.
+18. **Integrated localization is local.** The filter starts near the true pose;
+    kidnapped-robot recovery and global relocalization are not implemented.
 
 ---
 
@@ -649,31 +688,61 @@ collisions and one replan.
 
 ---
 
-## 12. Phase 8 — Integrated autonomy (next stage)
+## 12. Phase 8 — Integrated autonomy (completed)
 
-**Goal:** run the whole loop on the estimate and the live map, rather than
-proving each subsystem separately on ground truth.
+**Outcome:** the navigation loop runs on the particle-filter estimate. The
+supervisor plans, detects and replans from `pf.estimate()`, and the detector
+interprets the scan in that same estimated frame via
+`LidarScan.points_at(pose)`. Ground truth is read only after each step to score
+odometry and filter error. A new `integrated` scenario reuses the Phase 6 map,
+inflation and injection so the two runs compare directly. Five integration
+tests plus a `points_at` test bring the suite to 217.
 
-Proposed scope:
-1. Drive the supervisor from the **particle-filter estimate** in the recovery
-   scenario, so localization, detection, replanning and control close the loop.
-2. Score new obstacle cells against the **filter's current belief** rather than
-   the known map alone, reducing false detections when the pose is uncertain.
-3. Introduce a measured **localization failure** (kidnapped robot or a long
-   featureless corridor) and add a relocalization behaviour to the supervisor.
-4. Report end-to-end metrics per phase: estimate error, detection latency,
-   replans, collisions and goal success, using the Phase 7 harness.
-5. Add an integrated scenario to the suite so the estimate-driven loop is a
-   regression target, not only a demo.
+### Goal
+Run the whole loop on the estimate and the live map, rather than proving each
+subsystem separately on ground truth.
 
-Acceptance: the combined loop reaches the goal with zero collisions in the
-recovery scenario using only estimated pose, the 212-test baseline still passes,
-and the new scenario is reproducible across seeds.
+### Implemented scope
+1. `LidarScan.points_at(pose)` reprojects measured body-frame hits through a
+   supplied pose, so detection never consumes the ground-truth scan origin.
+2. `DynamicObstacleMap.integrate(scan, pose=None)` accepts an optional pose; the
+   supervisor passes the estimate it used for control, keeping one source of
+   truth for the map, plan and trajectory.
+3. The detector treats a `tolerance + 1` cell band along every world edge as
+   known. At 10 m a 0.03 rad heading error moves a wall hit by 0.3 m, more than
+   one 0.25 m cell; the band removes those false boundary detections while the
+   injected block stays detectable.
+4. `IntegratedMetrics` and `IntegratedTrace`; `simulate_integrated` and
+   `run_integrated`; the `integrated` scenario, dispatcher entry and exports.
+5. `scripts/phase8_demo.py` compares estimate-driven and ground-truth recovery
+   and plots route, error and map growth.
+6. `tests/test_integration.py` and a `points_at` test in `tests/test_lidar.py`.
+7. Docs: `docs/mathematics.md` section 17 and a Phase 8 section in
+   `docs/design_decisions.md`.
+
+### Acceptance (met)
+- All prior tests still pass; total is 217.
+- The estimate-driven loop reaches the goal with zero collisions and one
+  replan in the integrated scenario.
+- Integrated scenarios are reproducible for a seed, and the benchmark runs them
+  across seeds.
+- Phase 0-7 behaviour is unchanged: the Phase 6 demo still reports 56 cells,
+  zero collisions and one replan.
+
+### Measured results
+See section 3. Headlines: reached with zero collisions, `59.03 s`,
+`0.061 m` final error, `0.0915 m` filter RMS against `11.301 m` odometry RMS,
+`0.617 deg` heading RMS, and `65.7` detected cells.
+
+### Optional next step (Phase 9)
+Relocalization after a kidnapped-robot event: a global particle spread or an
+explicit relocalization behaviour, plus a scenario that displaces the robot
+mid-run and measures recovery time. This is proposed, not implemented.
 
 ---
 
 ## 13. Working agreement
 
-Keep the existing conventions and do not change Phase 0-7 behaviour; the
-current 212-test suite is the regression baseline. Commit implementation first,
+Keep the existing conventions and do not change Phase 0-8 behaviour; the
+current 217-test suite is the regression baseline. Commit implementation first,
 docs and demo second, then push.

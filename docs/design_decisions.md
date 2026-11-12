@@ -206,3 +206,42 @@
 - The recovery scenario is still evaluated on ground-truth pose. Feeding it the
   particle-filter estimate is the proposed Phase 8 integrated-autonomy step, not
   a change to this phase.
+
+## Integrated autonomy (Phase 8)
+
+- The particle-filter estimate is the **only** pose source for control and
+  detection. Ground truth is read after each step to compute error metrics and
+  is never passed to the supervisor, follower or detector.
+- A scan is interpreted at the estimate with `LidarScan.points_at(pose)` rather
+  than by mutating the scan. The scan stays an immutable record of what was
+  measured; the consumer chooses the pose frame.
+- `DynamicObstacleMap.integrate` takes an optional `pose`. The supervisor passes
+  the same pose it used for control, so the map, the plan and the trajectory all
+  share one estimate. Making the detector own a pose would create a second
+  source of truth.
+- World boundaries are treated as a band of `tolerance + 1` cells, not a single
+  ring. With an estimated pose a wall return can land inward by roughly
+  `range * heading_error`; the band suppresses those false detections. The
+  injected block remains far enough from the wall to be detected.
+- The integrated scenario reuses the recovery map, injection step and inflation.
+  Keeping it separate from the ground-truth recovery scenario lets the two be
+  compared directly without changing the older experiment.
+- `simulate_integrated` returns a trace (trajectory, per-step errors, detection
+  counts, events, cells) and builds `IntegratedMetrics` from it. The benchmark
+  runner and the Phase 8 demo both use this function, so the plotted run and the
+  scored run cannot drift apart. This is a deliberate improvement over the
+  earlier per-phase demos, which duplicate their loops.
+- Integrated metrics are a separate flat dataclass rather than a nested
+  composition of navigation and localization metrics. The CSV/JSON shape stays
+  one row per scenario, and every value is a float or int.
+- The particle filter still builds its likelihood field from the static known
+  grid. A prototype rebuilt the field from the dynamic map whenever a cell was
+  confirmed; it made filter RMS slightly worse in this scenario, so it was not
+  adopted. The dynamic map remains a planning and detection structure.
+- The filter is initialized from a small offset around the true start. This is a
+  tracking problem, not a global localization problem; kidnapped-robot recovery
+  is left for an optional later phase.
+- The integrated run remains seeded. LiDAR noise and particle sampling come from
+  the scenario seed; the map, route and injection step are fixed. The metrics
+  are therefore repeatable for a given seed and show run-to-run spread across
+  seeds.

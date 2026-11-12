@@ -1097,3 +1097,133 @@ divergent implementation.
 8. The per-phase demo scripts remain narrative experiments. They share the same
    underlying components but do not call the harness, so a future change could
    drift unless both are run.
+
+---
+
+## 17. Integrated autonomy (Phase 8)
+
+### 17.1 The closed loop
+
+Phase 6 evaluated recovery on ground-truth pose and Phase 5 evaluated control on
+the particle-filter estimate, but the two loops were never run together. Phase 8
+connects them:
+
+```text
+LiDAR scan -> particle filter -> pose estimate
+                    |                  |
+                    v                  v
+             map consistency      path follower
+                    |                  |
+                    v                  v
+             dynamic map ------> A* replan -> wheel commands
+```
+
+Only the simulator and the error metrics see the true pose. The supervisor, the
+detector and the controller all consume the estimate produced by the filter.
+
+The integrated runner is the same loop as `run_recovery`, with three changes:
+
+1. the supervisor receives `pf.estimate()` instead of the simulator pose;
+2. the wheel commands are converted through the odometry model before the
+   filter's predict step;
+3. the detector interprets the scan at the estimated pose rather than the
+   ground-truth sensor origin.
+
+### 17.2 Interpreting a scan at the estimated pose
+
+A `LidarScan` stores body-frame angles `alpha_i`, ranges `r_i`, the mount offset
+`b`, and the sensor origin where the scan was generated. `scan.points()` uses
+that stored origin. For integrated navigation the detector must not use it,
+because it is ground truth.
+
+Instead, `scan.points_at(pose)` reconstructs each hit from the measurement and
+the estimate:
+
+```text
+body_i   = b + r_i [cos(alpha_i), sin(alpha_i)]
+world_i  = [x_est, y_est] + R(theta_est) body_i
+```
+
+with
+
+```text
+R(theta) = [[cos(theta), -sin(theta)],
+            [ sin(theta),  cos(theta)]]
+```
+
+This is a change of coordinate frame, not a new measurement. The ranges and
+body angles are unchanged, so the detector still sees what the sensor measured;
+only the assumed sensor pose moves from truth to estimate.
+
+### 17.3 Boundary band
+
+World walls are implicit in the planning grid: the grid stores free space up to
+the boundary, and the detector used to treat only the outermost cell ring as
+known. With an estimated pose, a return from a boundary wall can land one or two
+cells inside that ring, especially at long range where a small heading error
+produces a large lateral displacement:
+
+```text
+lateral error ~ range * heading error
+```
+
+At 10 m and 0.03 rad (1.7 degrees) this is 0.3 m, or more than one 0.25 m cell.
+Those returns were being confirmed as new obstacles. The detector now marks a
+band of `tolerance + 1` cells along every world edge as known. With the default
+`tolerance = 1` this is a 0.5 m band, which removed the false boundary
+detections without hiding the injected block 2.3 m away from the wall.
+
+### 17.4 Metrics
+
+The integrated run reports the navigation metrics from Phase 6 plus the
+localization metrics from Phase 5:
+
+```text
+reached, failed, collisions, duration, final_error, replans, detected_cells
+odometry_rms, odometry_max, filter_rms, filter_max, filter_heading_rms_deg
+```
+
+The true pose is used only after each step to compute the odometry and filter
+errors. The controller never receives it.
+
+### 17.5 Measured results
+
+Full benchmark, three seeds (0, 1, 2), 800 particles, 60 beams:
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| goal reached | 1.0 | 0 |
+| collisions | 0 | 0 |
+| duration [s] | 59.03 | 0.03 |
+| final error [m] | 0.061 | 0.004 |
+| replans | 1 | 0 |
+| detected cells | 65.7 | 2.9 |
+| odometry position RMS [m] | 11.301 | 0.006 |
+| filter position RMS [m] | 0.0915 | 0.0008 |
+| filter position max [m] | 0.136 | 0.011 |
+| filter heading RMS [deg] | 0.617 | 0.007 |
+
+The ground-truth recovery run from Phase 6 reports `0.0987 m` final error and 56
+detected cells. The estimate-driven run is therefore slightly more accurate at
+the goal and detects a few extra cells near the new block, but still finishes
+with zero collisions and one replan. A single run takes about 2.1 s, so the
+three-seed scenario is roughly 6 s of the benchmark.
+
+### 17.6 Limitations
+
+1. The particle filter still scores scans against the **static** map. The
+   dynamic map is used for planning and detection, not for the measurement
+   likelihood. A map-aware likelihood was prototyped but did not improve the
+   filter in this scenario, so it is left as future work.
+2. The boundary band is a fixed geometric margin, not a function of the
+   particle covariance. It trades sensitivity near world edges for robustness
+   to pose error.
+3. Detection tolerance is fixed at one cell plus the boundary band. It is not
+   derived from the current particle spread.
+4. The filter starts from a known pose with a small offset. Kidnapped-robot
+   recovery and global relocalization are not implemented.
+5. One map, one route and one obstacle injection are evaluated. The integrated
+   scenario is a regression target, not a broad benchmark.
+6. The simulation remains 2D with no wheel dynamics, slip or actuator lag.
+7. Runtime is reported only as a rough wall-clock figure; the benchmark's
+   reproducibility claim covers simulated time, counts and geometric errors.
