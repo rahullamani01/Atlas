@@ -8,6 +8,7 @@ from typing import Sequence
 
 from atlas.control import PID, PathFollower
 from atlas.evaluation.metrics import (
+    IntegratedMetrics,
     KinematicsMetrics,
     LocalizationMetrics,
     MetricSummary,
@@ -22,7 +23,7 @@ from atlas.evaluation.scenarios import Scenario, default_scenarios
 from atlas.localization import ParticleFilter
 from atlas.perception import DynamicObstacleMap
 from atlas.planning import OccupancyGrid, a_star, dijkstra
-from atlas.recovery import NavigationSupervisor
+from atlas.recovery import NavEvent, NavigationSupervisor
 from atlas.robot.differential_drive import DifferentialDriveRobot, Pose
 from atlas.robot.odometry import Odometry
 from atlas.sensors import Lidar
@@ -44,6 +45,20 @@ class ScenarioResult:
     scenario: str
     seed: int
     metrics: dict[str, float | int]
+
+
+@dataclass(frozen=True)
+class IntegratedTrace:
+    """Detailed record of one estimate-driven navigation run."""
+
+    metrics: IntegratedMetrics
+    trajectory: list[tuple[float, float, float]]
+    odometry_errors: list[float]
+    filter_errors: list[float]
+    heading_errors: list[float]
+    detected_counts: list[int]
+    events: list[NavEvent]
+    detected_cells: set[tuple[int, int]]
 
 
 def _plan(scenario: Scenario):
@@ -305,6 +320,125 @@ def run_recovery(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     return ScenarioResult(scenario.name, seed, metrics.as_dict())
 
 
+def simulate_integrated(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> IntegratedTrace:
+    """Run localization, detection, planning and control as one loop.
+
+    The particle-filter estimate drives the supervisor, and the same estimate
+    is used to interpret LiDAR returns for map consistency. This is the Phase 8
+    integration test: no component sees ground-truth pose except the simulator
+    and the error metrics.
+    """
+    world, grid, _, path = _plan(scenario)
+    robot = DifferentialDriveRobot(pose=_start_pose(path))
+    sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        grid,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+    detector = DynamicObstacleMap(grid, clearance=scenario.inflation)
+    goal_cell = grid.world_to_cell(*scenario.goal)
+    supervisor = NavigationSupervisor(grid, goal_cell, detector=detector)
+    if not supervisor.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no initial route")
+
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    odometry_errors: list[float] = []
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    detected_counts: list[int] = []
+    executed = 0
+
+    for step in range(scenario.max_steps):
+        if scenario.inject_step is not None and step == scenario.inject_step:
+            world.obstacles.append(RectObstacle(*scenario.inject_rect))
+
+        estimate = pf.estimate()
+        scan = lidar.scan(world, robot.pose)
+        command = supervisor.step(estimate, scan, scenario.dt)
+        detected_counts.append(len(supervisor.detected_cells))
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(command.v, command.w)
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+        pf.update(scan)
+
+        estimate = pf.estimate()
+        odometry_errors.append(math.hypot(
+            odometry.pose.x - robot.pose.x,
+            odometry.pose.y - robot.pose.y,
+        ))
+        filter_errors.append(math.hypot(
+            estimate.x - robot.pose.x,
+            estimate.y - robot.pose.y,
+        ))
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        )))
+
+        if not ok or supervisor.goal_reached or supervisor.failed:
+            break
+
+    goal_world = grid.cell_to_world(goal_cell)
+    metrics = IntegratedMetrics(
+        reached=supervisor.goal_reached,
+        failed=supervisor.failed,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        final_error=math.hypot(
+            robot.pose.x - goal_world[0], robot.pose.y - goal_world[1]
+        ),
+        replans=supervisor.replan_count,
+        detected_cells=len(supervisor.detected_cells),
+        odometry_rms=rms(odometry_errors),
+        odometry_max=max(odometry_errors),
+        filter_rms=rms(filter_errors),
+        filter_max=max(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return IntegratedTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        odometry_errors=odometry_errors,
+        filter_errors=filter_errors,
+        heading_errors=heading_errors,
+        detected_counts=detected_counts,
+        events=list(supervisor.events),
+        detected_cells=set(supervisor.detected_cells),
+    )
+
+
+def run_integrated(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> ScenarioResult:
+    """Evaluate the estimate-driven navigation loop."""
+    trace = simulate_integrated(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -317,6 +451,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_localization(scenario, seed=seed)
     if scenario.kind == "recovery":
         return run_recovery(scenario, seed=seed)
+    if scenario.kind == "integrated":
+        return run_integrated(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 

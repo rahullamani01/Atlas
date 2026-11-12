@@ -25,6 +25,7 @@ def test_default_suite_covers_every_stage():
         "tracking",
         "localization",
         "recovery",
+        "integrated",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",

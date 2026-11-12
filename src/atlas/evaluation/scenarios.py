@@ -10,7 +10,14 @@ from typing import Callable
 
 from atlas.simulation.world import RectObstacle, World
 
-KINDS = ("kinematics", "planning", "tracking", "localization", "recovery")
+KINDS = (
+    "kinematics",
+    "planning",
+    "tracking",
+    "localization",
+    "recovery",
+    "integrated",
+)
 CONTROLLERS = ("p", "pid")
 
 
@@ -105,6 +112,13 @@ SCENARIOS: dict[str, Scenario] = {
     "recovery": Scenario(
         name="recovery",
         kind="recovery",
+        inflation=0.30,
+        inject_step=80,
+        inject_rect=(2.32, 5.7, 2.92, 6.3),
+    ),
+    "integrated": Scenario(
+        name="integrated",
+        kind="integrated",
         inflation=0.30,
         inject_step=80,
         inject_rect=(2.32, 5.7, 2.92, 6.3),

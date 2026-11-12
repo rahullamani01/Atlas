@@ -104,6 +104,26 @@ class LidarScan:
             )
         )
 
+    def points_at(self, pose: Pose) -> np.ndarray:
+        """World-space hit points if the scan is interpreted at `pose`.
+
+        The ranges and body-frame angles are kept, but the sensor pose is
+        replaced. This lets a consumer use an estimated pose without the
+        ground-truth origin stored in the scan.
+        """
+        mask = self.hit_mask
+        ranges = self.ranges[mask]
+        angles = self.angles[mask]
+        body_x = self.body_origin[0] + ranges * np.cos(angles)
+        body_y = self.body_origin[1] + ranges * np.sin(angles)
+        cos_t, sin_t = math.cos(pose.theta), math.sin(pose.theta)
+        return np.column_stack(
+            (
+                pose.x + cos_t * body_x - sin_t * body_y,
+                pose.y + sin_t * body_x + cos_t * body_y,
+            )
+        )
+
 
 class Lidar:
     """A planar range sensor with configurable resolution and noise."""

@@ -176,7 +176,7 @@ class NavigationSupervisor:
             raise ValueError("dt must be positive")
         self._step += 1
 
-        new_cells = self.map.integrate(scan)
+        new_cells = self.map.integrate(scan, pose)
         if new_cells:
             self.detected_cells.update(new_cells)
             self._log("detect", f"{len(new_cells)} cells")

@@ -17,6 +17,7 @@ import math
 import numpy as np
 
 from atlas.planning.grid import Cell, OccupancyGrid
+from atlas.robot.differential_drive import Pose
 from atlas.sensors.lidar import LidarScan
 
 
@@ -83,21 +84,29 @@ class DynamicObstacleMap:
         self.dynamic = np.zeros((known_grid.height, known_grid.width), dtype=bool)
         self._known_near = _dilate(known_grid.blocked, self.tolerance)
         # World walls are implicit in the planning grid, so LiDAR returns from
-        # them land in the outer ring of free cells. Treat that ring as known.
-        self._known_near[0, :] = True
-        self._known_near[-1, :] = True
-        self._known_near[:, 0] = True
-        self._known_near[:, -1] = True
+        # them land in the outer free cells. With an estimated pose a return can
+        # land one tolerance band further in, so mark `tolerance + 1` cells as
+        # known. This is much thinner than the clearance used for real
+        # obstacles, and it keeps boundary walls from becoming false detections.
+        band = self.tolerance + 1
+        self._known_near[:band, :] = True
+        self._known_near[-band:, :] = True
+        self._known_near[:, :band] = True
+        self._known_near[:, -band:] = True
 
-    def integrate(self, scan: LidarScan) -> list[Cell]:
+    def integrate(self, scan: LidarScan, pose: Pose | None = None) -> list[Cell]:
         """Fade old evidence, add this scan's returns, and update the grid.
+
+        ``pose`` overrides the sensor pose stored in the scan. Pass the current
+        pose estimate when the scan was produced from ground truth, so map
+        consistency is evaluated in the estimated frame.
 
         Returns the list of ``(col, row)`` cells that became blocked this call.
         """
         height, width = self.evidence.shape
         self.evidence *= self.decay
 
-        points = scan.points()
+        points = scan.points() if pose is None else scan.points_at(pose)
         if points.size:
             ox, oy = self.grid.origin
             resolution = self.grid.resolution

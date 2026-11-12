@@ -212,3 +212,35 @@ class NavigationMetrics:
             "replans": self.replans,
             "detected_cells": self.detected_cells,
         }
+
+
+@dataclass(frozen=True)
+class IntegratedMetrics:
+    reached: bool
+    failed: bool
+    collisions: int
+    duration: float
+    final_error: float
+    replans: int
+    detected_cells: int
+    odometry_rms: float
+    odometry_max: float
+    filter_rms: float
+    filter_max: float
+    filter_heading_rms_deg: float
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "reached": 1.0 if self.reached else 0.0,
+            "failed": 1.0 if self.failed else 0.0,
+            "collisions": self.collisions,
+            "duration": self.duration,
+            "final_error": self.final_error,
+            "replans": self.replans,
+            "detected_cells": self.detected_cells,
+            "odometry_rms": self.odometry_rms,
+            "odometry_max": self.odometry_max,
+            "filter_rms": self.filter_rms,
+            "filter_max": self.filter_max,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+        }

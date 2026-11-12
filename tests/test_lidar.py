@@ -54,6 +54,15 @@ def test_ray_hits_a_rectangular_obstacle():
     assert scan.ranges[FORWARD] == pytest.approx(5.0)
 
 
+def test_points_at_uses_the_given_pose():
+    world = World(20, 20, [RectObstacle(10, 0, 11, 20)])
+    scan = full_lidar().scan(world, Pose(5, 5, 0))
+    same = scan.points_at(Pose(5, 5, 0))
+    assert np.allclose(same, scan.points())
+    shifted = scan.points_at(Pose(5.1, 5.0, 0))
+    assert np.allclose(shifted - same, [0.1, 0.0], atol=1e-9)
+
+
 def test_nearest_obstacle_wins():
     world = World(20, 20, [
         RectObstacle(12, 0, 13, 20),
