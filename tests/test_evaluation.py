@@ -26,6 +26,7 @@ def test_default_suite_covers_every_stage():
         "localization",
         "recovery",
         "integrated",
+        "relocalization",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",
@@ -72,6 +73,36 @@ def test_unknown_scenario_raises_a_clear_error():
                 "inject_rect": (3, 2, 2, 3),
             },
             "inject_rect",
+        ),
+        (
+            {"name": "x", "kind": "relocalization", "kidnap_step": 5},
+            "provided together",
+        ),
+        (
+            {
+                "name": "x",
+                "kind": "relocalization",
+                "kidnap_pose": (1, 1, 0),
+            },
+            "provided together",
+        ),
+        (
+            {
+                "name": "x",
+                "kind": "relocalization",
+                "kidnap_step": -1,
+                "kidnap_pose": (1, 1, 0),
+            },
+            "kidnap_step",
+        ),
+        (
+            {
+                "name": "x",
+                "kind": "relocalization",
+                "kidnap_step": 5,
+                "kidnap_pose": (1, float("nan"), 0),
+            },
+            "finite",
         ),
     ],
 )

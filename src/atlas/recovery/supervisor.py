@@ -168,6 +168,32 @@ class NavigationSupervisor:
         self._log("replan", f"{len(self.path)} waypoints")
         return True
 
+    def resume(self, pose: Pose) -> bool:
+        """Resume driving after an external pose correction.
+
+        Cells confirmed in the old frame are untrustworthy after a pose jump,
+        so the dynamic map is cleared and the route is replanned from ``pose``.
+        Returns False if no route exists; the caller may keep trying.
+        """
+        self.map.reset()
+        self.detected_cells.clear()
+        self.path = []
+        self.follower.reset()
+        if not self.replan(pose):
+            return False
+        self._enter(NavState.DRIVING, "pose reacquired")
+        return True
+
+    def advance_clock(self, steps: int = 1) -> None:
+        """Advance the step counter while the supervisor is not driving.
+
+        The supervisor is paused during relocalization. Counting those steps
+        keeps its event timestamps aligned with the caller's control loop.
+        """
+        if steps < 0:
+            raise ValueError("steps must be non-negative")
+        self._step += steps
+
     # ---- main loop ----
 
     def step(self, pose: Pose, scan: LidarScan, dt: float) -> Twist:

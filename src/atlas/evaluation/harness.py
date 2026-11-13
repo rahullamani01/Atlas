@@ -6,7 +6,7 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
-from atlas.control import PID, PathFollower
+from atlas.control import PID, PathFollower, Twist
 from atlas.evaluation.metrics import (
     IntegratedMetrics,
     KinematicsMetrics,
@@ -14,13 +14,14 @@ from atlas.evaluation.metrics import (
     MetricSummary,
     NavigationMetrics,
     PlanningMetrics,
+    RelocalizationMetrics,
     TrackingMetrics,
     path_errors,
     rms,
     summarize,
 )
 from atlas.evaluation.scenarios import Scenario, default_scenarios
-from atlas.localization import ParticleFilter
+from atlas.localization import LocalizationMonitor, ParticleFilter, Relocalizer
 from atlas.perception import DynamicObstacleMap
 from atlas.planning import OccupancyGrid, a_star, dijkstra
 from atlas.recovery import NavEvent, NavigationSupervisor
@@ -36,6 +37,13 @@ LIDAR_RANGE = 10.0
 LIDAR_SIGMA = 0.02
 LIKELIHOOD_SCALE = 0.2
 TRACKING_BIAS = 0.2
+
+RELOCALIZE_STEPS = 40
+RELOCALIZE_SETTLE_STEPS = 10
+RELOCALIZE_SPEED = 0.6
+RESIDUAL_LIMIT = 0.5
+RESIDUAL_PATIENCE = 8
+RECOVERY_TOLERANCE = 0.5
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,18 @@ class IntegratedTrace:
     filter_errors: list[float]
     heading_errors: list[float]
     detected_counts: list[int]
+    events: list[NavEvent]
+    detected_cells: set[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class RelocalizationTrace:
+    """Detailed record of one kidnapped-robot recovery run."""
+
+    metrics: RelocalizationMetrics
+    trajectory: list[tuple[float, float, float]]
+    filter_errors: list[float]
+    residuals: list[float]
     events: list[NavEvent]
     detected_cells: set[tuple[int, int]]
 
@@ -439,6 +459,248 @@ def run_integrated(
     return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
 
 
+def simulate_relocalization(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> RelocalizationTrace:
+    """Run navigation, then recover from a mid-run pose jump.
+
+    The robot is teleported once, which odometry does not observe. A residual
+    monitor declares the filter lost, the robot rotates in place while a
+    multi-hypothesis scan matcher accumulates evidence, and the winning pose
+    seeds the filter again. The dynamic map is cleared because cells confirmed
+    in the old frame are not trustworthy.
+    """
+    world, grid, _, path = _plan(scenario)
+    if scenario.kidnap_pose is not None:
+        cell = grid.world_to_cell(
+            scenario.kidnap_pose[0], scenario.kidnap_pose[1]
+        )
+        if not grid.is_free(cell):
+            raise RuntimeError("kidnap_pose must be free in the planning grid")
+
+    robot = DifferentialDriveRobot(pose=_start_pose(path))
+    sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        grid,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+    detector = DynamicObstacleMap(grid, clearance=scenario.inflation)
+    goal_cell = grid.world_to_cell(*scenario.goal)
+    supervisor = NavigationSupervisor(grid, goal_cell, detector=detector)
+    if not supervisor.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no initial route")
+
+    monitor = LocalizationMonitor(RESIDUAL_LIMIT, RESIDUAL_PATIENCE)
+    relocalizer = Relocalizer(grid, max_beams=beams)
+
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    residuals: list[float] = []
+    events: list[NavEvent] = []
+    post_kidnap: list[float] = []
+    post_recovery: list[float] = []
+    post_recovery_headings: list[float] = []
+
+    relocalizing = False
+    settle = False
+    relocalize_step = 0
+    settle_step = 0
+    relocalizations = 0
+    kidnapped = False
+    detection_step: int | None = None
+    recovery_step: int | None = None
+    error_at_kidnap = 0.0
+    executed = 0
+
+    for step in range(scenario.max_steps):
+        if scenario.kidnap_step is not None and step == scenario.kidnap_step:
+            robot.pose = Pose(*scenario.kidnap_pose)
+            kidnapped = True
+            error_at_kidnap = math.hypot(
+                pf.estimate().x - robot.pose.x,
+                pf.estimate().y - robot.pose.y,
+            )
+            trajectory.append(
+                (robot.pose.x, robot.pose.y, robot.pose.theta)
+            )
+            events.append(NavEvent(
+                step,
+                "kidnap",
+                f"teleported to ({robot.pose.x:.2f}, {robot.pose.y:.2f})",
+            ))
+
+        scan = lidar.scan(world, robot.pose)
+        residual = pf.scan_residual(scan)
+        residuals.append(residual)
+        skip_filter = False
+        finish = False
+
+        if relocalizing:
+            relocalizer.observe(
+                scan, dtheta=RELOCALIZE_SPEED * scenario.dt
+            )
+            command = Twist(0.0, RELOCALIZE_SPEED)
+            relocalize_step += 1
+            supervisor.advance_clock()
+            skip_filter = True
+            finish = relocalize_step >= RELOCALIZE_STEPS
+        elif settle:
+            command = Twist(0.0, RELOCALIZE_SPEED)
+            settle_step += 1
+            supervisor.advance_clock()
+        elif kidnapped and monitor.update(residual):
+            relocalizer.search(scan)
+            relocalizing = True
+            relocalize_step = 0
+            detection_step = step
+            command = Twist()
+            skip_filter = True
+            supervisor.advance_clock()
+            events.append(NavEvent(
+                step, "lost", f"scan residual {residual:.2f} m"
+            ))
+        else:
+            command = supervisor.step(pf.estimate(), scan, scenario.dt)
+
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(
+            command.v, command.w
+        )
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+
+        if finish:
+            best = relocalizer.best()
+            pf.initialize(best.pose, position_std=0.10, heading_std=0.03)
+            relocalizing = False
+            settle = True
+            settle_step = 0
+            relocalizations += 1
+            monitor.reset()
+            relocalizer.reset()
+            events.append(NavEvent(
+                step,
+                "relocalized",
+                f"hypothesis residual {best.score:.3f} m",
+            ))
+        elif not skip_filter:
+            v_hat, w_hat = odometry.wheel_speeds_to_twist(
+                wheel_l, wheel_r
+            )
+            pf.predict(v_hat, w_hat, scenario.dt)
+            pf.update(scan)
+
+        if settle and settle_step >= RELOCALIZE_SETTLE_STEPS:
+            supervisor.resume(pf.estimate())
+            settle = False
+            events.append(NavEvent(
+                step,
+                "resumed",
+                "detection and driving restarted",
+            ))
+
+        estimate = pf.estimate()
+        error = math.hypot(
+            estimate.x - robot.pose.x, estimate.y - robot.pose.y
+        )
+        filter_errors.append(error)
+        heading_error = abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        ))
+        heading_errors.append(heading_error)
+        if kidnapped:
+            post_kidnap.append(error)
+        if recovery_step is not None:
+            post_recovery.append(error)
+            post_recovery_headings.append(heading_error)
+        elif (
+            kidnapped
+            and relocalizations > 0
+            and error < RECOVERY_TOLERANCE
+        ):
+            recovery_step = step
+
+        if not ok or supervisor.goal_reached or supervisor.failed:
+            break
+
+    goal_world = grid.cell_to_world(goal_cell)
+    metrics = RelocalizationMetrics(
+        reached=supervisor.goal_reached,
+        failed=supervisor.failed,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        final_error=math.hypot(
+            robot.pose.x - goal_world[0], robot.pose.y - goal_world[1]
+        ),
+        replans=supervisor.replan_count,
+        detected_cells=len(supervisor.detected_cells),
+        kidnapped=kidnapped,
+        relocalizations=relocalizations,
+        relocalized=recovery_step is not None,
+        detection_latency=(
+            (detection_step - scenario.kidnap_step) * scenario.dt
+            if detection_step is not None and scenario.kidnap_step is not None
+            else -1.0
+        ),
+        recovery_time=(
+            (recovery_step - scenario.kidnap_step) * scenario.dt
+            if recovery_step is not None and scenario.kidnap_step is not None
+            else -1.0
+        ),
+        error_at_kidnap=error_at_kidnap,
+        post_kidnap_rms=rms(post_kidnap) if post_kidnap else 0.0,
+        post_recovery_rms=(
+            rms(post_recovery) if post_recovery else 0.0
+        ),
+        post_recovery_heading_rms_deg=(
+            math.degrees(rms(post_recovery_headings))
+            if post_recovery_headings
+            else 0.0
+        ),
+        filter_max=max(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return RelocalizationTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        filter_errors=filter_errors,
+        residuals=residuals,
+        events=sorted(
+            list(supervisor.events) + events, key=lambda event: event.step
+        ),
+        detected_cells=set(supervisor.detected_cells),
+    )
+
+
+def run_relocalization(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> ScenarioResult:
+    """Evaluate kidnapped-robot detection and recovery."""
+    trace = simulate_relocalization(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -453,6 +715,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_recovery(scenario, seed=seed)
     if scenario.kind == "integrated":
         return run_integrated(scenario, seed=seed)
+    if scenario.kind == "relocalization":
+        return run_relocalization(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 

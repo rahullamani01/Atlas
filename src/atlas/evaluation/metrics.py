@@ -215,6 +215,52 @@ class NavigationMetrics:
 
 
 @dataclass(frozen=True)
+class RelocalizationMetrics:
+    reached: bool
+    failed: bool
+    collisions: int
+    duration: float
+    final_error: float
+    replans: int
+    detected_cells: int
+    kidnapped: bool
+    relocalizations: int
+    relocalized: bool
+    detection_latency: float
+    recovery_time: float
+    error_at_kidnap: float
+    post_kidnap_rms: float
+    post_recovery_rms: float
+    post_recovery_heading_rms_deg: float
+    filter_max: float
+    filter_heading_rms_deg: float
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "reached": 1.0 if self.reached else 0.0,
+            "failed": 1.0 if self.failed else 0.0,
+            "collisions": self.collisions,
+            "duration": self.duration,
+            "final_error": self.final_error,
+            "replans": self.replans,
+            "detected_cells": self.detected_cells,
+            "kidnapped": 1.0 if self.kidnapped else 0.0,
+            "relocalizations": self.relocalizations,
+            "relocalized": 1.0 if self.relocalized else 0.0,
+            "detection_latency": self.detection_latency,
+            "recovery_time": self.recovery_time,
+            "error_at_kidnap": self.error_at_kidnap,
+            "post_kidnap_rms": self.post_kidnap_rms,
+            "post_recovery_rms": self.post_recovery_rms,
+            "post_recovery_heading_rms_deg": (
+                self.post_recovery_heading_rms_deg
+            ),
+            "filter_max": self.filter_max,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+        }
+
+
+@dataclass(frozen=True)
 class IntegratedMetrics:
     reached: bool
     failed: bool

@@ -5,6 +5,7 @@ run gets a fresh world and an obstacle injection can never leak between seeds.
 """
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Callable
 
@@ -17,6 +18,7 @@ KINDS = (
     "localization",
     "recovery",
     "integrated",
+    "relocalization",
 )
 CONTROLLERS = ("p", "pid")
 
@@ -34,10 +36,12 @@ def demo_world() -> World:
 class Scenario:
     """One reproducible experiment configuration.
 
-    ``kind`` selects the runner: kinematics, planning, tracking, localization or
-    recovery. ``controller`` and ``yaw_bias`` only affect tracking runs.
-    ``inject_step`` / ``inject_rect`` add a new obstacle after the given control
-    step, which is how the recovery scenario changes the world mid-run.
+    ``kind`` selects the runner: kinematics, planning, tracking, localization,
+    recovery, integrated or relocalization. ``controller`` and ``yaw_bias`` only
+    affect tracking runs. ``inject_step`` / ``inject_rect`` add a new obstacle
+    after the given control step, which is how the recovery scenario changes the
+    world mid-run. ``kidnap_step`` / ``kidnap_pose`` teleport the robot for the
+    relocalization scenario; odometry does not observe the move.
     """
 
     name: str
@@ -53,6 +57,8 @@ class Scenario:
     yaw_bias: float = 0.0
     inject_step: int | None = None
     inject_rect: tuple[float, float, float, float] | None = None
+    kidnap_step: int | None = None
+    kidnap_pose: tuple[float, float, float] | None = None
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -79,6 +85,17 @@ class Scenario:
             xmin, ymin, xmax, ymax = self.inject_rect
             if xmin >= xmax or ymin >= ymax:
                 raise ValueError("inject_rect must have positive width and height")
+        if (self.kidnap_step is None) != (self.kidnap_pose is None):
+            raise ValueError(
+                "kidnap_step and kidnap_pose must be provided together"
+            )
+        if self.kidnap_step is not None:
+            if self.kidnap_step < 0:
+                raise ValueError("kidnap_step must be non-negative")
+            if len(self.kidnap_pose) != 3:
+                raise ValueError("kidnap_pose must be (x, y, theta)")
+            if not all(math.isfinite(value) for value in self.kidnap_pose):
+                raise ValueError("kidnap_pose values must be finite")
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -122,6 +139,13 @@ SCENARIOS: dict[str, Scenario] = {
         inflation=0.30,
         inject_step=80,
         inject_rect=(2.32, 5.7, 2.92, 6.3),
+    ),
+    "relocalization": Scenario(
+        name="relocalization",
+        kind="relocalization",
+        inflation=0.30,
+        kidnap_step=200,
+        kidnap_pose=(2.125, 16.125, 0.0),
     ),
 }
 

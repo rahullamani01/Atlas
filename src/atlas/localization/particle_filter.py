@@ -246,6 +246,43 @@ class ParticleFilter:
         var_y = float(np.sum(self.weights * (self.particles[:, 1] - mean.y) ** 2))
         return math.sqrt(var_x), math.sqrt(var_y)
 
+    def scan_residual(self, scan: LidarScan, pose: Pose | None = None) -> float:
+        """Mean distance from projected scan endpoints to mapped obstacles.
+
+        A small residual means the scan is consistent with the map at ``pose``
+        (the estimate by default). A large residual means the pose hypothesis
+        does not explain what the sensor sees, which is the signal a
+        kidnapped-robot monitor needs. Distances are clipped at
+        ``max_distance`` and use the same beam subset as ``update``.
+        """
+        if not self._initialized:
+            raise RuntimeError("call initialize() first")
+
+        valid = np.flatnonzero(scan.hit_mask)
+        if len(valid) == 0:
+            return 0.0
+        if len(valid) > self.max_beams:
+            picks = np.linspace(
+                0, len(valid) - 1, self.max_beams
+            ).round().astype(int)
+            valid = valid[picks]
+
+        ranges = scan.ranges[valid]
+        angles = scan.angles[valid]
+        body = np.column_stack((
+            ranges * np.cos(angles), ranges * np.sin(angles)
+        ))
+        body += np.asarray(scan.body_origin)
+
+        reference = self.estimate() if pose is None else pose
+        cos_t, sin_t = math.cos(reference.theta), math.sin(reference.theta)
+        xs = reference.x + cos_t * body[:, 0] - sin_t * body[:, 1]
+        ys = reference.y + sin_t * body[:, 0] + cos_t * body[:, 1]
+
+        distances = self.field.sample(np.column_stack((xs, ys)))
+        distances = np.minimum(distances, self.max_distance)
+        return float(np.mean(distances))
+
     @property
     def effective_sample_size(self) -> float:
         return self._ess
