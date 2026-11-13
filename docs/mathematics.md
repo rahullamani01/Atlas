@@ -1220,10 +1220,276 @@ three-seed scenario is roughly 6 s of the benchmark.
    to pose error.
 3. Detection tolerance is fixed at one cell plus the boundary band. It is not
    derived from the current particle spread.
-4. The filter starts from a known pose with a small offset. Kidnapped-robot
-   recovery and global relocalization are not implemented.
+4. The filter starts from a known pose with a small offset. In this phase
+   kidnapped-robot recovery and global relocalization are not yet implemented;
+   Phase 9 adds them as a separate detection-and-search pipeline.
 5. One map, one route and one obstacle injection are evaluated. The integrated
    scenario is a regression target, not a broad benchmark.
 6. The simulation remains 2D with no wheel dynamics, slip or actuator lag.
 7. Runtime is reported only as a rough wall-clock figure; the benchmark's
    reproducibility claim covers simulated time, counts and geometric errors.
+
+## 18. Kidnapped-robot relocalization (Phase 9)
+
+A particle filter that starts near the true pose tracks it well, but it cannot
+recover from an arbitrary displacement. After a kidnap every particle is in the
+wrong place, the measurement update rewards whichever wrong hypothesis happens
+to fit, and no amount of resampling moves the cloud to the new pose. The fix is
+not a larger cloud but a different inference step: detect that the filter is
+inconsistent, run a global search over the known map, confirm the best
+candidate with more than one scan, and only then restart the filter.
+
+### 18.1 Scan residual
+
+The filter already projects measured endpoints into the world at a candidate
+pose to score them against the distance field. The same projection gives a
+scalar diagnostic. For the subset `B` of valid beams used by the filter, with
+body-frame endpoints `b_i = (r_i cos a_i, r_i sin a_i) + o` (`o` is the sensor
+mount), a pose `p` maps them to
+
+```text
+x_i = p.x + cos(p.theta) b_i.x - sin(p.theta) b_i.y
+y_i = p.y + sin(p.theta) b_i.x + cos(p.theta) b_i.y
+```
+
+and the residual is
+
+```text
+r(p) = (1 / |B|) sum_i min(D(x_i, y_i), d_max)
+```
+
+where `D` is the distance to the nearest mapped obstacle and `d_max = 1.0 m`
+caps the contribution of a badly wrong beam. At the true pose the residual is
+the LiDAR noise floor, about `0.03 m` clean and `0.13 m` with the 0.02 m range
+noise used in the benchmark. After a 10.5 m kidnap it jumps to about `0.85 m`.
+The gap is wide enough that a fixed threshold separates the two regimes
+without leaning on a calibrated noise model.
+
+`ParticleFilter.scan_residual(scan, pose=None)` returns `r` at the estimate by
+default, or at a supplied pose for diagnostics. It shares the beam subset,
+distance field and `max_distance` clipping with `update`, so the diagnostic and
+the likelihood cannot disagree about what a scan means.
+
+### 18.2 Lost detection
+
+A single bad scan is normal: a doorway, a moving object or a transient range
+outlier can all raise the residual. `LocalizationMonitor` therefore requires a
+sustained failure. With limit `r_limit` and patience `N`:
+
+```text
+if r > r_limit:   bad_steps += 1
+else:             bad_steps  = 0
+
+trigger = (bad_steps >= N) and not already_triggered
+```
+
+One acceptable scan clears the streak, so only a persistent mismatch triggers a
+search. The monitor latches after triggering, which matters because the
+relocalizer runs for tens of steps while the filter is deliberately not
+updated; without the latch the same failure would restart the search every
+step. `reset()` rearms it after a successful recovery.
+
+The benchmark uses `r_limit = 0.5 m` and `N = 8` at 20 Hz, so detection takes at
+most `0.40 s`. The measured latency is `0.35 s` (`7` steps), because the
+kidnap happens after the scan for that step has already been scored.
+
+### 18.3 Coarse-to-fine global search
+
+Global localization is a search over the map, not a filter update. The search
+space is every free cell centre crossed with a heading grid. For the 80 x 80
+grid at 0.25 m that is roughly 20,000 free cells; a full product with 36
+headings is over 700,000 poses. Two reductions make it cheap and, more
+importantly, keep it well behaved:
+
+1. **Coarse positions.** Free cells are subsampled with `stride = 4`, giving a
+   1 m position lattice, and paired with headings every 10 degrees. That is
+   about 12,000 poses per scan, scored in roughly 10-20 ms with a vectorised
+   projection.
+2. **Coarse separation.** Instead of taking the top `M` scores, candidates are
+   accepted in ascending-score order only if they are more than 1.5 m from
+   every already-accepted candidate. This prevents three near-identical poses
+   from consuming the whole budget. The default keeps `M = 4` hypotheses.
+
+Each coarse candidate is then refined on a local grid: `+/- 0.5 m` in `0.25 m`
+steps and `+/- 10` degrees in 5 degree steps, taking the best pose in that
+neighbourhood, then deduplicating refined poses that are within 1.0 m of each
+other. The refinement matters because a 1 m coarse lattice is coarser than the
+tolerance the filter needs.
+
+The score for a candidate is the same mean clipped residual as section 18.1,
+with one addition.
+
+### 18.4 Out-of-bounds endpoints
+
+The distance field covers the map and merges analytic world-wall distance. A
+projected endpoint can still fall outside the map rectangle when a candidate
+pose is wrong: the beam is measured in one place and cast from another. The
+obvious fix is to clamp the endpoint to the boundary and sample there, but that
+is wrong. Clamping turns every escaped beam into a point on the wall, which is
+exactly the obstacle the distance field reports at distance zero. A wrong pose
+whose beams fly out of the map then scores as well as, or better than, the true
+pose. During development this produced candidates that matched the scan better
+than the true pose and made the whole search fail.
+
+The implemented penalty measures how far outside the endpoint actually is:
+
+```text
+d_out = hypot(max(xmin - x, 0, x - xmax),
+              max(ymin - y, 0, y - ymax))
+penalty = max(d_out - wall_tolerance, 0)
+```
+
+with `wall_tolerance = 0.10 m`. The tolerance absorbs endpoints that legitimately
+land a few centimetres outside because of range noise or the grid origin, while
+a beam that escapes by metres is penalised by metres and clipped at `d_max`.
+This change alone was the difference between a search that reliably found the
+true pose and one that did not.
+
+### 18.5 Multi-hypothesis confirmation
+
+One scan is ambiguous. Corridors repeat, rooms have similar corners, and a 360
+degree scan from a symmetric pose can fit several places in a 20 x 20 map. The
+relocalizer therefore does not commit after one match. It keeps the candidate
+bank from `search()`, and while the robot rotates in place it calls
+
+```text
+observe(scan, dtheta):
+    accumulated[k] += score(scan, pose_k)
+    observations   += 1
+    pose_k.theta   += dtheta      for every k
+```
+
+Two details make the accumulation correct. The scan is scored **before** the
+hypothesis heading is advanced, because the scan was measured at the current
+heading. And the heading of each hypothesis is advanced by the same rotation
+the robot is about to perform, so hypotheses stay aligned with the vehicle
+frame rather than being re-searched each step.
+
+After `K` observations the winning hypothesis is
+
+```text
+k* = argmin_k accumulated[k]
+best = Pose(pose_{k*}, accumulated[k*] / observations)
+```
+
+Averaging by the number of observations keeps the reported residual on the same
+scale as a single-scan score. Accumulation is a simple sum rather than a
+recursive likelihood because the poses are not being integrated: each candidate
+is a fixed world pose with a rotating heading, and the question is only which
+one explains the whole rotation. In the benchmark the wrong hypotheses keep a
+mean residual near `0.2 m` across the rotation while the true one sits at
+`0.03 m`, so 40 steps of rotation widen a single-scan margin into a decisive
+one.
+
+### 18.6 Recovery sequence
+
+The end-to-end loop in `simulate_relocalization` is:
+
+1. Drive normally from the particle-filter estimate.
+2. At `kidnap_step`, set the true pose to `kidnap_pose` without touching
+   odometry. The filter keeps predicting from wheel commands, so its estimate
+   does not move with the robot.
+3. Score every scan. Once the monitor latches, run the global search on that
+   scan and switch to `RELOCALIZE_SPEED = 0.6 rad/s` in place.
+4. For `RELOCALIZE_STEPS = 40` steps, accumulate evidence. The filter is not
+   updated during this window; updating it at the wrong pose would corrupt the
+   particles and bias the eventual seed.
+5. Seed the filter at the winning pose with `position_std = 0.10 m` and
+   `heading_std = 0.03 rad`, then settle for `RELOCALIZE_SETTLE_STEPS = 10`
+   steps with detection off. The filter needs a few scans to tighten around the
+   seed before it can be trusted for control.
+6. Call `NavigationSupervisor.resume(estimate)`. This clears the dynamic map and
+   every detected cell, resets the follower, and replans from the corrected
+   pose. Cells confirmed in the old frame describe obstacles at the wrong
+   coordinates, so keeping them would block the route with phantom obstacles.
+7. Rearm the monitor and continue to the goal.
+
+`NavigationSupervisor.advance_clock()` counts the paused steps so supervisor
+event timestamps stay aligned with the caller's step index. Without it the
+relocalization window would disappear from the supervisor's stall accounting and
+from the plotted timeline.
+
+The emergency rotation is a deliberate simplification: the robot stops
+translating while it gathers evidence. A production system would prefer to keep
+moving, but a stationary rotation makes the geometric confirmation exact and
+keeps the recovery bounded.
+
+### 18.7 Metrics
+
+`RelocalizationMetrics` adds the recovery timing and error decomposition to the
+navigation metrics:
+
+```text
+detection_latency         time from kidnap to the lost decision [s]
+recovery_time             time from kidnap to error < 0.5 m [s]
+error_at_kidnap           estimate error immediately after the teleport [m]
+post_kidnap_rms           error over the whole lost interval [m]
+post_recovery_rms         error after recovery to the goal [m]
+post_recovery_heading_rms heading error after recovery [deg]
+filter_max                worst position error over the run [m]
+filter_heading_rms_deg    heading error over the whole run [deg]
+```
+
+`post_kidnap_rms` includes the interval in which the filter is knowingly wrong,
+so it is a measure of how long the robot stays lost, not of estimator quality.
+`post_recovery_rms` and `post_recovery_heading_rms` are the meaningful
+steady-state figures. The overall heading RMS is inflated by the lost interval
+and should not be compared with the Phase 8 tracking result.
+
+### 18.8 Measured results
+
+Three seeds, 800 particles, 60 beams, kidnap at step 200 to
+`(2.125, 16.125, 0.0)`:
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| goal reached | 1.0 | 0 |
+| collisions | 0 | 0 |
+| relocalizations | 1 | 0 |
+| detection latency [s] | 0.35 | 0 |
+| recovery time [s] | 2.35 | 0 |
+| error at kidnap [m] | 10.531 | 0.005 |
+| post-kidnap RMS [m] | 2.592 | 0.002 |
+| post-recovery RMS [m] | 0.0920 | 0.0005 |
+| post-recovery heading RMS [deg] | 0.58 | 0.09 |
+| overall heading RMS [deg] | 14.24 | 0.03 |
+| final error [m] | 0.063 | 0.003 |
+| duration [s] | 47.38 | 0.03 |
+| replans | 2.7 | 0.6 |
+| detected cells at the end | 0 | 0 |
+
+The `2.35 s` recovery is dominated by the deliberate search window: `0.35 s` to
+detect, then 40 steps (`2.0 s`) of rotation and accumulation, then the
+settling phase, with `resume()` about `0.5 s` after the pose is reacquired. The
+whole search itself costs roughly 15 ms per scan, so computation is not the
+bottleneck; evidence gathering is.
+
+`detected_cells` at the end is zero because the dynamic map is cleared on
+resume and this scenario injects no obstacle. During the lost interval the
+detector does confirm phantom cells (up to about 190 in a step when the wrong
+pose sweeps walls into the map), which is exactly why `resume()` discards them.
+That number is intentionally not a success metric for this scenario.
+
+### 18.9 Limitations
+
+1. **One kidnap pose per scenario.** The search is stress-tested on several
+   poses during development, but the benchmark scenario uses one. A broader
+   claim needs a grid of kidnap poses and resulting success rates.
+2. **The map is known and static.** The search scores against the static
+   likelihood field. A changed world would need the dynamic map or a SLAM map,
+   and this phase deliberately keeps the dynamic map out of the global search.
+3. **Stationary confirmation.** The robot stops to rotate. It does not
+   relocalize while driving, and it assumes the rotation is unblocked.
+4. **Single-scan ambiguity is handled by rotation, not by a probabilistic
+   multi-scan filter.** Accumulation works well here but is not a full
+   multi-hypothesis Bayes filter; there is no explicit posterior over places.
+5. **The kidnap pose must be free in the planning grid.** The scenario
+   validates this, but the runner does not search for a nearby free pose.
+6. **Fixed thresholds.** The residual limit and patience are constants tuned on
+   this noise level. A range-dependent or covariance-aware threshold would
+   generalize better.
+7. **One map, one route, three seeds.** As with the rest of the benchmark, this
+   is a regression target rather than a broad evaluation.
+8. **No loop closure or map repair.** If the world genuinely changes, the
+   search will match the static map, and repeated failures are not escalated to
+   a mapping behaviour.

@@ -245,3 +245,80 @@
   the scenario seed; the map, route and injection step are fixed. The metrics
   are therefore repeatable for a given seed and show run-to-run spread across
   seeds.
+
+## Kidnapped-robot relocalization (Phase 9)
+
+- Relocalization lives in its own module (`localization/relocalization.py`)
+  rather than inside `ParticleFilter`. The filter is a tracking estimator; a
+  global search is a different inference procedure with its own parameters and
+  failure modes. Keeping them separate means the tracking loop is unchanged and
+  the search can be tested without a filter.
+- Global particle initialization alone was tried first and **rejected**. Spread
+  over the whole map, 800-2,500 particles converged to a wrong symmetry and
+  stayed 12-13 m off after 100 rotating scans. A scan match that evaluates
+  poses directly is far more sample-efficient than random particles, so the
+  implemented path is search-then-seed rather than spread-and-hope.
+- Lost detection uses a residual **streak** with a latch, not a single
+  threshold crossing and not particle spread. A single bad scan is normal;
+  spread collapses toward zero even when the filter is confidently wrong, so it
+  cannot signal a kidnap.
+- The residual is mean clipped distance to the mapped obstacles, sharing the
+  beam subset and clipping with `ParticleFilter.update`. Sharing those details
+  avoids a diagnostic that disagrees with the likelihood about the same scan.
+- Candidate selection enforces spatial separation (1.5 m coarse, 1.0 m after
+  refinement). Taking the raw top `M` scores returns `M` copies of one place,
+  which defeats the purpose of keeping alternatives.
+- Each candidate is **refined** on a local grid before use. A 1 m coarse
+  position lattice and 10 degree heading lattice are too coarse for a 0.10 m
+  seed; the refinement is what makes the lattice usable.
+- Endpoints outside the map are penalised by how far outside they are, minus a
+  0.10 m wall tolerance. Clamping them to the boundary was implemented, tested
+  and removed: it makes escaped beams look like wall hits at distance zero, so
+  wrong poses outscored the true one. This is the single most important
+  numerical detail in the phase.
+- The search keeps a **bank** of hypotheses and accumulates scores over an
+  in-place rotation instead of committing to the best single scan. One scan is
+  ambiguous in a repetitive map; rotation provides new constraints for free.
+- Scores are accumulated before the hypothesis heading is advanced, and each
+  hypothesis heading is advanced by the commanded rotation. This keeps evidence
+  attached to the pose at which it was measured.
+- Accumulation is a plain sum of per-scan mean residuals, and the reported score
+  divides by the observation count. Each candidate is a fixed world pose with a
+  rotating heading, not an integrated trajectory, so a recursive likelihood
+  would add complexity without changing the ranking.
+- The robot **stops and rotates** to gather evidence. This is a deliberate
+  simplification: a stationary rotation makes the confirmation exact and the
+  recovery time bounded. Relocalizing while driving is future work.
+- The particle filter is not updated during the search window. Updating it at a
+  known-wrong pose would corrupt the particles before they are replaced.
+- After the search the filter is **reseeded**, not merged with the old cloud.
+  The old cloud is known to be wrong; retaining any of it would reintroduce the
+  failure.
+- A short settling phase runs before control resumes. The fresh seed has a
+  finite spread, and a few scans are needed before the estimate is stable
+  enough to plan from.
+- `NavigationSupervisor.resume()` clears the dynamic map and detected cells
+  before replanning. Cells confirmed in the old pose frame are phantom obstacles
+  in the new one. Keeping them would block the route for no physical reason.
+- `NavigationSupervisor.advance_clock()` counts paused steps so supervisor event
+  timestamps remain comparable with the caller's step index. Pausing the
+  supervisor without advancing its clock would silently shorten its stall
+  window and shift its events in the plot.
+- The kidnap is modelled by assigning the simulator pose directly, with no
+  odometry update. That is the defining property of a kidnap: the motion is
+  unobservable to the robot. It is not a large noise injection.
+- `kidnap_step` and `kidnap_pose` must be supplied together, and the pose must
+  be finite and free in the planning grid. A kidnap into an obstacle would make
+  the scenario unsolvable for reasons unrelated to localization.
+- `RelocalizationMetrics` is a separate flat dataclass. Recovery timing and the
+  pre/post error split do not belong in navigation or tracking metrics, and the
+  JSON/CSV shape stays one row per scenario.
+- `detected_cells` at the end of a relocalization run is expected to be zero,
+  because the map is cleared on recovery and the scenario injects no obstacle.
+  It is reported for completeness but is not a Phase 9 success metric.
+- The search scores against the **static** likelihood field only. The dynamic
+  map exists to support planning and detection in a trusted pose frame; feeding
+  it into a search that runs precisely because the pose is untrusted would
+  compound the error.
+- The scenario remains seeded and deterministic. The kidnap step and pose are
+  fixed, and LiDAR noise and particle sampling come from the seed.

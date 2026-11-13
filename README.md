@@ -16,15 +16,20 @@ project in Python (motion model, planning, control, sensing, localization).
 | 6 | Dynamic obstacles and recovery | complete |
 | 7 | Evaluation and metrics | complete |
 | 8 | Integrated autonomy | complete |
-| 9 | Optional extensions | proposed |
+| 9 | Kidnapped-robot relocalization | complete |
 
-Phase 8 closes the loop on the estimated pose. The particle filter drives the
+Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
 map, so localization, detection, replanning and control run together. In the
 integrated scenario the robot detects a new block, replans once and reaches the
-goal with zero collisions, `0.091 m` filter RMS and `0.06 m` final error. The
-core navigation roadmap is complete; the optional next step is relocalization
-after a kidnapped-robot event.
+goal with zero collisions, `0.091 m` filter RMS and `0.06 m` final error.
+
+Phase 9 adds the missing failure mode. A map-consistency monitor notices that
+the scan no longer fits the estimate, a coarse-to-fine scan match proposes global
+poses, several hypotheses are accumulated over an in-place rotation, and the
+winner reseeds the filter before navigation resumes. The kidnapped run detects
+the displacement in `0.35 s`, reacquires the pose in `2.35 s`, and finishes with
+`0.092 m` post-recovery RMS and zero collisions.
 
 ## Layout
 
@@ -44,19 +49,20 @@ src/atlas/
 │   └── lidar.py                 # 2D ray casting, field of view, range noise
 ├── localization/
 │   ├── likelihood_field.py      # distance-to-obstacle field
-│   └── particle_filter.py       # motion/measurement models, resampling
+│   ├── particle_filter.py       # motion/measurement models, resampling, residual
+│   └── relocalization.py        # lost detection, global search, hypothesis bank
 ├── perception/
 │   └── obstacle_detector.py     # map-inconsistent returns, evidence, clearance
 ├── recovery/
-│   └── supervisor.py            # replanning and the recovery state machine
+│   └── supervisor.py            # replanning, recovery state machine, resume
 ├── evaluation/
 │   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
 │   ├── scenarios.py             # named scenario registry and validation
-│   └── harness.py               # runners, integrated trace, suite execution, aggregation
+│   └── harness.py               # runners, integrated/relocalization traces, suite
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 217 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, integration, evaluation
+tests/                           # 230 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, integration, relocalization, evaluation
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
@@ -65,10 +71,11 @@ scripts/
 ├── phase5_demo.py               # odometry vs particle-filter localization
 ├── phase6_demo.py               # reactive vs blind navigation with a new obstacle
 ├── phase8_demo.py               # estimate-driven detection, replanning and recovery
-└── evaluate.py                  # Phase 7-8 scenario suite with JSON/CSV export
+├── phase9_demo.py               # kidnap detection, global search and recovery
+└── evaluate.py                  # Phase 7-9 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, evaluation
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, evaluation
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -91,6 +98,7 @@ python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
 python scripts/phase8_demo.py
+python scripts/phase9_demo.py
 python scripts/evaluate.py
 ```
 
@@ -114,14 +122,19 @@ python scripts/evaluate.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
-- **Phase 7:** runs all seven scenarios over several seeds and prints aggregate
+- **Phase 7:** runs all eight scenarios over several seeds and prints aggregate
   tables (mean/std/min/max) for kinematics, planning, tracking, localization,
-  recovery and integrated autonomy. `--scenario`, `--seeds`, `--json` and
-  `--csv` select subsets and export results.
+  recovery, integrated autonomy and relocalization. `--scenario`, `--seeds`,
+  `--json` and `--csv` select subsets and export results.
 - **Phase 8:** runs the recovery scenario on the particle-filter estimate and
   the live dynamic map. Compares against the ground-truth run, reports filter
   error, collisions, replans and detection, and shows the map growing. Plot:
   `experiments/plots/phase8_integrated.png`.
+- **Phase 9:** teleports the robot mid-route without telling odometry. Detects
+  the map mismatch, rotates in place while a coarse-to-fine global search
+  accumulates pose hypotheses, reseeds the filter and resumes navigation.
+  Reports detection latency, recovery time, pre/post error and the recovery
+  timeline. Plot: `experiments/plots/phase9_relocalization.png`.
 
 ## Motion model in brief
 
@@ -254,12 +267,35 @@ The trace also contains the trajectory, per-step odometry/filter errors, the
 detected cells and the supervisor events, so the same run can be plotted or
 scored without a second implementation.
 
+## Relocalization in brief
+
+```python
+from atlas.localization import LocalizationMonitor, Relocalizer
+
+monitor = LocalizationMonitor(residual_limit=0.5, patience=8)
+relocalizer = Relocalizer(grid, max_beams=60)
+
+residual = pf.scan_residual(scan)          # mean scan-to-map distance
+if monitor.update(residual):               # sustained inconsistency
+    relocalizer.search(scan)               # coarse-to-fine global match
+    for _ in range(40):                    # rotate in place
+        relocalizer.observe(scan, dtheta=0.6 * dt)
+    best = relocalizer.best()              # lowest accumulated residual
+    pf.initialize(best.pose, position_std=0.10, heading_std=0.03)
+    supervisor.resume(pf.estimate())       # clear dynamic map and replan
+```
+
+A single scan is ambiguous, so the relocalizer keeps several spatially
+separated candidates and scores each one over the whole rotation. The dynamic
+map is cleared on resume because cells confirmed in the old pose frame are no
+longer trustworthy.
+
 ## Evaluation in brief
 
 ```python
 from atlas.evaluation import aggregate, get_scenario, run_suite
 
-# Seven scenarios, three seeds: 21 runs, no shared mutable state between runs.
+# Eight scenarios, three seeds: 24 runs, no shared mutable state between runs.
 results = run_suite(seeds=(0, 1, 2))
 summary = aggregate(results)
 

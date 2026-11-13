@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 12 November 2026
-**Branch:** `main` (synced with `origin/main`)
-**Latest work:** Phase 8 — integrated autonomy
-**Tests:** 217 passing (`pytest`)
+**Date:** 13 November 2026
+**Branch:** `main` (working tree; nothing pushed)
+**Latest work:** Phase 9 — kidnapped-robot relocalization
+**Tests:** 230 passing (`pytest`)
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -21,24 +21,25 @@
 | 6 | Dynamic obstacles and recovery | complete |
 | 7 | Evaluation and metrics | complete |
 | 8 | Integrated autonomy | complete |
-| 9 | Optional extensions (relocalization) | proposed |
+| 9 | Kidnapped-robot relocalization | complete |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
 optimal collision-free route, drive the route with feedback control, sense
 surrounding geometry with a simulated 2D LiDAR, estimate its own pose by fusing
-wheel odometry with those scans, and react when the world changes after
-planning.
+wheel odometry with those scans, react when the world changes after planning,
+and recover when it is displaced without warning.
 
 The navigation loop detects LiDAR returns that disagree with the known map,
 grows a dynamic obstacle map, replans around confirmed obstacles, and falls back
 to a bounded scan/backup/fail recovery sequence. A reusable evaluation package
-scores kinematics, planning, tracking, localization, recovery and integrated
-autonomy on one set of scenarios across seeds, so regressions surface in a
-single command. The loop is now closed: the particle-filter estimate drives the
-supervisor and the detector, and ground truth is used only to score error.
-The core roadmap is complete; the optional next step is relocalization after a
-kidnapped-robot event.
+scores kinematics, planning, tracking, localization, recovery, integrated
+autonomy and relocalization on one set of scenarios across seeds, so regressions
+surface in a single command. The loop is closed: the particle-filter estimate
+drives the supervisor and the detector, and ground truth is used only to score
+error. A map-consistency monitor now notices a kidnapped robot, a coarse-to-fine
+global search reacquires the pose, and navigation resumes. The core roadmap and
+the optional relocalization extension are both complete.
 
 ---
 
@@ -125,8 +126,24 @@ kidnapped-robot event.
   - `initialize(pose, position_std, heading_std)`, `initialize_global`,
     `predict(v, w, dt)`, `update(scan, resample=True)`, `step(...)`
   - `resample()`, `estimate()`, `position_std()`, `effective_sample_size`
+  - `scan_residual(scan, pose=None)` — mean clipped scan-to-map distance at a
+    pose, used by the Phase 9 lost detector
   - noisy unicycle motion model; endpoint likelihood from the distance field;
     systematic resampling below `ESS < N/2`; roughening jitter
+- `src/atlas/localization/relocalization.py` (Phase 9)
+  - `PoseHypothesis(pose, score)`
+  - `LocalizationMonitor(residual_limit=0.5, patience=8)`
+    - `update(residual) -> bool` fires once after a sustained streak and latches
+    - `reset()` rearms after recovery
+  - `Relocalizer(grid, max_beams=60, coarse_stride=4, heading_step_deg=10,
+    max_candidates=4, coarse_separation=1.5, refine_distance=0.5,
+    refine_position_step=0.25, refine_heading_deg=10,
+    refine_heading_step_deg=5, max_distance=1.0, wall_tolerance=0.10)`
+    - `search(scan)` coarse-to-fine global match, keeps a separated candidate bank
+    - `observe(scan, dtheta)` accumulates scores, then rotates hypotheses
+    - `best()`, `reset()`, `hypothesis_count`, `observations`
+    - out-of-bounds endpoints are penalised by distance outside the map minus
+      `wall_tolerance`, never clamped to the boundary
 
 ### Phase 6 — perception and recovery (`src/atlas/`)
 - `DynamicObstacleMap(known_grid, confirm_threshold=2.0, unblock_threshold=0.5,
@@ -148,6 +165,8 @@ kidnapped-robot event.
   scan_steps=30, scan_speed=1.0, backup_steps=20, backup_speed=-0.15,
   stall_window=120, stall_distance=0.10)`
   - `plan(pose)`, `replan(pose)`, `step(pose, scan, dt) -> Twist`
+  - `resume(pose)` — clear the dynamic map and detected cells, replan, drive
+  - `advance_clock(steps=1)` — keep event timestamps aligned while paused
   - `goal_reached`, `failed`, `recovering`, `path`, `events`, `plan_count`,
     `replan_count`, `detected_cells`
   - replans when a path cell is blocked; recovers by scanning, backing up, then
@@ -162,24 +181,29 @@ kidnapped-robot event.
   - `summarize(values) -> MetricSummary(count, mean, std, minimum, maximum)`
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
     `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
-    `IntegratedMetrics`
+    `IntegratedMetrics`, `RelocalizationMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
   - `Scenario(name, kind, world, start, goal, resolution, inflation, dt,
-    max_steps, controller, yaw_bias, inject_step, inject_rect)` with validation
+    max_steps, controller, yaw_bias, inject_step, inject_rect, kidnap_step,
+    kidnap_pose)` with validation
   - `demo_world()` returns a fresh 20 x 20 world per run
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
-  - seven scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
-    `localization`, `recovery`, `integrated`
+  - eight scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+    `localization`, `recovery`, `integrated`, `relocalization`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
-    `run_recovery`, `run_integrated`
+    `run_recovery`, `run_integrated`, `run_relocalization`
   - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
     returns the trajectory, per-step odometry/filter/heading errors, detection
     counts, supervisor events and detected cells; the benchmark runner and the
     Phase 8 demo both consume it
+  - `simulate_relocalization(...) -> RelocalizationTrace` runs the kidnap,
+    detection, search, settling and resume sequence and returns the trajectory,
+    per-step filter errors and residuals, events and detected cells; the
+    benchmark runner and the Phase 9 demo both consume it
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -204,6 +228,11 @@ kidnapped-robot event.
   estimate with estimate-frame detection, compares it against the ground-truth
   recovery run, plots the route, localization error and map growth, and saves
   `experiments/plots/phase8_integrated.png`.
+- `scripts/phase9_demo.py` — kidnaps the robot mid-route, detects the mismatch,
+  runs the global search during an in-place rotation, reseeds the filter and
+  resumes navigation. Plots the route and teleport, localization error and the
+  map-consistency residual with all recovery events, and saves
+  `experiments/plots/phase9_relocalization.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -215,9 +244,11 @@ kidnapped-robot event.
   casting, odometry error, Bayes recursion, motion/measurement models,
   likelihood fields, ESS, resampling, map-consistency detection, evidence
   decay/hysteresis, clearance, replanning, the recovery state machine, scenario
-  design, tracking/localization/planning metrics, aggregation, determinism and
+  design, tracking/localization/planning metrics, aggregation, determinism,
   the Phase 8 integrated loop (estimate-frame projection, boundary band,
-  integrated metrics).
+  integrated metrics) and the Phase 9 relocalization pipeline (scan residual,
+  lost detection, coarse-to-fine search, out-of-bounds penalty,
+  multi-hypothesis accumulation, recovery sequence and metrics).
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -225,7 +256,7 @@ kidnapped-robot event.
 
 ## 3. Verified numbers
 
-- 217 tests pass.
+- 230 tests pass.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -260,7 +291,8 @@ kidnapped-robot event.
   - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
   - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
     collision
-- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs):
+- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs; the suite now has 8
+  scenarios and 24 runs):
   - kinematics: Euler `2.10e-4 m`, midpoint `8.76e-7 m`, exact `6.27e-15 m`
     over one circle
   - planning: A* cost `29.021 m`, 103 waypoints, 1,074 vs 4,465 cells expanded
@@ -275,6 +307,20 @@ kidnapped-robot event.
     `0.0608 ± 0.0044 m` final error, `65.7 ± 2.9` detected cells, filter
     position RMS `0.0915 ± 0.0008 m` (max `0.136 ± 0.011 m`) against odometry
     `11.301 ± 0.006 m`, heading RMS `0.617 ± 0.007 deg`
+- Phase 9 benchmark (relocalization, seeds 0-2, kidnap at step 200 to
+  `(2.125, 16.125, 0.0)`):
+  - reached, zero collisions, exactly one relocalization per run
+  - detection latency `0.35 s`, recovery time `2.35 s`
+  - error at kidnap `10.531 ± 0.005 m`, post-kidnap RMS `2.592 ± 0.002 m`
+  - post-recovery RMS `0.0920 ± 0.0005 m`, post-recovery heading RMS
+    `0.58 ± 0.09 deg`
+  - final error `0.063 ± 0.003 m`, duration `47.38 ± 0.03 s`, `2.7 ± 0.6`
+    replans, zero detected cells at the end (dynamic map cleared on resume)
+  - overall heading RMS `14.24 ± 0.03 deg` is dominated by the lost interval
+    and is not a steady-state figure
+  - Phase 6 recovery (`56` cells, zero collisions, one replan, `0.0987 m` final
+    error) and Phase 8 integrated (`59.03 s`, `0.0608 m`, `65.7` cells, filter
+    RMS `0.0915 m`) are unchanged
   - deterministic metrics repeat to floating-point precision (aggregate std at
     most ~1e-17); wall-clock planner times vary and are not part of the
     reproducibility claim
@@ -310,6 +356,7 @@ python scripts/phase4_demo.py
 python scripts/phase5_demo.py
 python scripts/phase6_demo.py
 python scripts/phase8_demo.py
+python scripts/phase9_demo.py
 python scripts/evaluate.py
 ```
 
@@ -325,10 +372,11 @@ Repository workflow used so far:
 
 ## 6. Known limitations and gotchas
 
-1. **State estimation is local.** The filter tracks well from a known start but
-   cannot recover from an arbitrarily wrong prior; capture range is set by the
-   initial particle spread. The Phase 6 recovery sequence handles blocked routes,
-   not a lost robot.
+1. **Tracking is local; recovery is explicit.** The filter tracks well from a
+   known start, and its capture range is set by the initial particle spread.
+   Phase 9 adds a separate global search after a detected kidnap, but the
+   filter itself is still a tracking estimator and the search still assumes the
+   static map is correct.
 2. **Grid paths cut visually close to corners.** Inflation gives clearance plus
    a conservative half-cell; the Phase 3 demo adds a 0.05 m planning margin
    because a lookahead controller cuts corners. Longer lookaheads need more
@@ -346,8 +394,8 @@ Repository workflow used so far:
 7. **Replanning reacts only to newly observed cells.** Paths are replanned when
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
-8. **The evaluation suite is deliberately small.** One map, one route, six
-   scenario kinds, seven scenarios and three seeds. It is a regression harness,
+8. **The evaluation suite is deliberately small.** One map, one route, seven
+   scenario kinds, eight scenarios and three seeds. It is a regression harness,
    not a broad robotics benchmark; aggregation reports descriptive statistics
    only.
 9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
@@ -378,8 +426,21 @@ Repository workflow used so far:
     `tolerance + 1` cell band along world edges suppresses false detections from
     pose error, at the cost of sensitivity near walls. Detection tolerance is
     likewise fixed rather than derived from particle spread.
-18. **Integrated localization is local.** The filter starts near the true pose;
-    kidnapped-robot recovery and global relocalization are not implemented.
+18. **Relocalization is a simplified global search.** It assumes a known static
+    map, a free kidnap pose, a stationary in-place rotation, and fixed residual
+    thresholds. It is stress-tested on several poses during development but the
+    benchmark uses one kidnap pose; symmetry failures remain possible in a
+    repetitive map. There is no loop closure, no SLAM and no relocalization
+    while driving.
+19. **Dynamic-map cells are discarded on recovery.** `resume()` clears the
+    dynamic map because cells confirmed in the old pose frame are phantom
+    obstacles in the new one. This is correct for a kidnap, but it also throws
+    away any genuinely detected obstacle that is still present; the next scans
+    must reconfirm it.
+20. **The residual threshold is fixed.** `residual_limit = 0.5 m` and
+    `patience = 8` are tuned for the benchmark's 0.02 m range noise. A
+    range-dependent threshold derived from particle spread would generalize
+    better, at the cost of more machinery.
 
 ---
 
@@ -737,12 +798,78 @@ See section 3. Headlines: reached with zero collisions, `59.03 s`,
 ### Optional next step (Phase 9)
 Relocalization after a kidnapped-robot event: a global particle spread or an
 explicit relocalization behaviour, plus a scenario that displaces the robot
-mid-run and measures recovery time. This is proposed, not implemented.
+mid-run and measures recovery time. This was proposed at the end of Phase 8 and
+is implemented in section 13.
 
 ---
 
-## 13. Working agreement
+## 13. Phase 9 — Kidnapped-robot relocalization (completed)
+
+**Outcome:** the robot now notices and recovers from a silent displacement.
+`ParticleFilter.scan_residual` measures how well a scan fits the map at the
+estimate; `LocalizationMonitor` declares the filter lost after `patience`
+consecutive inconsistent scans; `Relocalizer` runs a coarse-to-fine global scan
+match, keeps a spatially separated bank of pose hypotheses and accumulates their
+scores over an in-place rotation; the winner reseeds the filter; and
+`NavigationSupervisor.resume()` clears the now-untrustworthy dynamic map and
+replans. In the new `relocalization` scenario the robot detects the kidnap in
+`0.35 s`, reacquires its pose in `2.35 s`, and reaches the goal with zero
+collisions and `0.092 m` post-recovery RMS.
+
+### Goal
+Recover from a kidnapped-robot event: detect that the filter is inconsistent,
+find the true pose globally in the known map, and resume navigation without a
+collision or a manual restart.
+
+### Implemented scope
+1. `ParticleFilter.scan_residual(scan, pose=None)` — mean clipped distance from
+   projected endpoints to mapped obstacles, sharing the beam subset and clipping
+   with `update`.
+2. `src/atlas/localization/relocalization.py` — `PoseHypothesis`,
+   `LocalizationMonitor` (residual limit, patience, latch, rearm) and
+   `Relocalizer` (coarse-to-fine search, out-of-bounds penalty, separated
+   candidate bank, observation accumulation, best hypothesis).
+3. `NavigationSupervisor.resume(pose)` and `advance_clock(steps)` — clear the
+   dynamic map and detections, replan, and keep supervisor event timestamps
+   aligned while paused.
+4. `RelocalizationMetrics`, `RelocalizationTrace`, `simulate_relocalization`,
+   `run_relocalization`, dispatcher entry and exports.
+5. `kidnap_step` / `kidnap_pose` scenario fields with paired validation, and the
+   `relocalization` scenario (kidnap at step 200 to `(2.125, 16.125, 0.0)`, no
+   obstacle injection).
+6. `tests/test_relocalization.py` (13 tests) and `tests/test_evaluation.py`
+   updates for the new kind, scenario count and validation.
+7. `scripts/phase9_demo.py` — route/teleport plot, localization error and
+   residual timeline with all recovery events.
+8. Docs: `docs/mathematics.md` section 18 and the Phase 9 section of
+   `docs/design_decisions.md`.
+
+### Acceptance (met)
+- All prior tests still pass; total is 230.
+- Every seeded run detects the kidnap, relocalizes exactly once, and reaches the
+  goal with zero collisions.
+- Detection latency is below `0.5 s` and pose recovery below `3 s`.
+- Post-recovery position RMS is below `0.1 m` and heading RMS below `1 deg`.
+- Phase 0-8 behaviour is unchanged: Phase 6 recovery still reports 56 cells,
+  zero collisions and one replan; Phase 8 integrated still reports `59.03 s`,
+  `0.0608 m`, `65.7` cells and `0.0915 m` filter RMS.
+
+### Measured results
+See section 3. Headlines: `0.35 s` detection, `2.35 s` recovery, `10.531 m`
+error at the kidnap, `0.0920 m` post-recovery RMS, `0.58 deg` post-recovery
+heading RMS, `0.063 m` final error, zero collisions.
+
+### Deliberate simplifications
+- The robot stops and rotates to gather evidence.
+- The global search uses the static map only.
+- The kidnap pose must be free in the planning grid.
+- The residual threshold and patience are fixed constants.
+- One kidnap pose is benchmarked, though several were used during development.
+
+---
+
+## 14. Working agreement
 
 Keep the existing conventions and do not change Phase 0-8 behaviour; the
-current 217-test suite is the regression baseline. Commit implementation first,
-docs and demo second, then push.
+current 230-test suite is the regression baseline. Commit implementation first,
+docs and demo second. Do not push to `origin` until explicitly approved.
