@@ -261,6 +261,50 @@ class RelocalizationMetrics:
 
 
 @dataclass(frozen=True)
+class MappingMetrics:
+    reached: bool
+    failed: bool
+    collisions: int
+    duration: float
+    final_error: float
+    replans: int
+    map_updates: int
+    added_cells: int
+    removed_cells: int
+    known_ratio: float
+    observed_ratio: float
+    prior_map_error: int
+    final_map_error: int
+    map_error_reduction: int
+    map_repair_ratio: float
+    filter_rms: float
+    filter_max: float
+    filter_heading_rms_deg: float
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "reached": 1.0 if self.reached else 0.0,
+            "failed": 1.0 if self.failed else 0.0,
+            "collisions": self.collisions,
+            "duration": self.duration,
+            "final_error": self.final_error,
+            "replans": self.replans,
+            "map_updates": self.map_updates,
+            "added_cells": self.added_cells,
+            "removed_cells": self.removed_cells,
+            "known_ratio": self.known_ratio,
+            "observed_ratio": self.observed_ratio,
+            "prior_map_error": self.prior_map_error,
+            "final_map_error": self.final_map_error,
+            "map_error_reduction": self.map_error_reduction,
+            "map_repair_ratio": self.map_repair_ratio,
+            "filter_rms": self.filter_rms,
+            "filter_max": self.filter_max,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+        }
+
+
+@dataclass(frozen=True)
 class IntegratedMetrics:
     reached: bool
     failed: bool

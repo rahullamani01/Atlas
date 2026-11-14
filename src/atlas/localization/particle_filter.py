@@ -227,6 +227,22 @@ class ParticleFilter:
         self.predict(v, w, dt)
         self.update(scan)
 
+    def replace_grid(self, grid: OccupancyGrid) -> None:
+        """Swap the map used by the measurement model and rebuild the field.
+
+        Mapping changes the occupancy grid while the robot drives. The filter
+        must score scans against the current map, otherwise newly discovered
+        obstacles keep looking like measurement outliers and the likelihood
+        stays stale. Particle states and weights are preserved; only the map and
+        its derived distance field change.
+        """
+        if grid.width <= 0 or grid.height <= 0:
+            raise ValueError("grid must have positive dimensions")
+        self.grid = grid
+        self.field = DistanceField.from_grid(
+            grid, include_boundary=True, boundary_only=True
+        )
+
     # ---- estimates ----
 
     def estimate(self) -> Pose:

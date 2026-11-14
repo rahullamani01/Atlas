@@ -19,6 +19,7 @@ KINDS = (
     "recovery",
     "integrated",
     "relocalization",
+    "slam",
 )
 CONTROLLERS = ("p", "pid")
 
@@ -32,21 +33,44 @@ def demo_world() -> World:
     ])
 
 
+def slam_world() -> World:
+    """The true world for Phase 10: one extra block in the wall gap."""
+    return World(20, 20, [
+        RectObstacle(6, 0, 7, 14),     # vertical wall with a gap at the top
+        RectObstacle(10, 9, 17, 10),   # horizontal wall
+        RectObstacle(13, 2, 15, 4),    # free-standing block
+        RectObstacle(6, 14, 7, 15),    # block the prior map does not know about
+    ])
+
+
+def slam_prior_world() -> World:
+    """The map the robot starts with: missing block, one phantom obstacle."""
+    return World(20, 20, [
+        RectObstacle(6, 0, 7, 14),
+        RectObstacle(10, 9, 17, 10),
+        RectObstacle(13, 2, 15, 4),
+        RectObstacle(1.0, 5.0, 2.2, 8.0),  # phantom: actually free space
+    ])
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One reproducible experiment configuration.
 
     ``kind`` selects the runner: kinematics, planning, tracking, localization,
-    recovery, integrated or relocalization. ``controller`` and ``yaw_bias`` only
-    affect tracking runs. ``inject_step`` / ``inject_rect`` add a new obstacle
-    after the given control step, which is how the recovery scenario changes the
-    world mid-run. ``kidnap_step`` / ``kidnap_pose`` teleport the robot for the
-    relocalization scenario; odometry does not observe the move.
+    recovery, integrated, relocalization or slam. ``controller`` and
+    ``yaw_bias`` only affect tracking runs. ``inject_step`` / ``inject_rect``
+    add a new obstacle after the given control step, which is how the recovery
+    scenario changes the world mid-run. ``kidnap_step`` / ``kidnap_pose``
+    teleport the robot for the relocalization scenario; odometry does not
+    observe the move. ``prior_world`` supplies the map the robot starts with
+    for mapping runs; it may omit real obstacles and contain phantom ones.
     """
 
     name: str
     kind: str
     world: Callable[[], World] = demo_world
+    prior_world: Callable[[], World] | None = None
     start: tuple[float, float] = (1.125, 1.125)
     goal: tuple[float, float] = (18.125, 18.125)
     resolution: float = 0.25
@@ -75,6 +99,8 @@ class Scenario:
             raise ValueError("max_steps must be positive")
         if self.controller not in CONTROLLERS:
             raise ValueError(f"controller must be one of {CONTROLLERS}")
+        if self.prior_world is not None and not callable(self.prior_world):
+            raise ValueError("prior_world must be callable")
         if (self.inject_step is None) != (self.inject_rect is None):
             raise ValueError(
                 "inject_step and inject_rect must be provided together"
@@ -146,6 +172,13 @@ SCENARIOS: dict[str, Scenario] = {
         inflation=0.30,
         kidnap_step=200,
         kidnap_pose=(2.125, 16.125, 0.0),
+    ),
+    "slam": Scenario(
+        name="slam",
+        kind="slam",
+        world=slam_world,
+        prior_world=slam_prior_world,
+        inflation=0.30,
     ),
 }
 

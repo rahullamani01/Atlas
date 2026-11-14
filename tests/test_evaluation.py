@@ -27,10 +27,12 @@ def test_default_suite_covers_every_stage():
         "recovery",
         "integrated",
         "relocalization",
+        "slam",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",
         "tracking_p",
+        "slam",
     }
 
 
@@ -103,6 +105,10 @@ def test_unknown_scenario_raises_a_clear_error():
                 "kidnap_pose": (1, float("nan"), 0),
             },
             "finite",
+        ),
+        (
+            {"name": "x", "kind": "slam", "prior_world": object()},
+            "prior_world",
         ),
     ],
 )

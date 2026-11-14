@@ -1,12 +1,14 @@
-"""Evaluation metrics, scenarios and benchmark runners (Phase 7-8)."""
+"""Evaluation metrics, scenarios and benchmark runners (Phase 7-10)."""
 from atlas.evaluation.harness import (
     IntegratedTrace,
+    MappingTrace,
     RelocalizationTrace,
     ScenarioResult,
     aggregate,
     run_integrated,
     run_kinematics,
     run_localization,
+    run_mapping,
     run_planning,
     run_recovery,
     run_relocalization,
@@ -14,12 +16,14 @@ from atlas.evaluation.harness import (
     run_suite,
     run_tracking,
     simulate_integrated,
+    simulate_mapping,
     simulate_relocalization,
 )
 from atlas.evaluation.metrics import (
     IntegratedMetrics,
     KinematicsMetrics,
     LocalizationMetrics,
+    MappingMetrics,
     MetricSummary,
     NavigationMetrics,
     PlanningMetrics,
@@ -43,6 +47,8 @@ __all__ = [
     "IntegratedTrace",
     "KinematicsMetrics",
     "LocalizationMetrics",
+    "MappingMetrics",
+    "MappingTrace",
     "MetricSummary",
     "NavigationMetrics",
     "PlanningMetrics",
@@ -59,6 +65,7 @@ __all__ = [
     "run_integrated",
     "run_kinematics",
     "run_localization",
+    "run_mapping",
     "run_planning",
     "run_recovery",
     "run_relocalization",
@@ -67,6 +74,7 @@ __all__ = [
     "run_tracking",
     "segment_projection",
     "simulate_integrated",
+    "simulate_mapping",
     "simulate_relocalization",
     "summarize",
 ]

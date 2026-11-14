@@ -11,6 +11,7 @@ from atlas.evaluation.metrics import (
     IntegratedMetrics,
     KinematicsMetrics,
     LocalizationMetrics,
+    MappingMetrics,
     MetricSummary,
     NavigationMetrics,
     PlanningMetrics,
@@ -22,9 +23,10 @@ from atlas.evaluation.metrics import (
 )
 from atlas.evaluation.scenarios import Scenario, default_scenarios
 from atlas.localization import LocalizationMonitor, ParticleFilter, Relocalizer
+from atlas.mapping import LogOddsMap, MapEvent, MappingNavigator, map_error
 from atlas.perception import DynamicObstacleMap
 from atlas.planning import OccupancyGrid, a_star, dijkstra
-from atlas.recovery import NavEvent, NavigationSupervisor
+from atlas.recovery import NavEvent, NavigationSupervisor, nearest_free_cell
 from atlas.robot.differential_drive import DifferentialDriveRobot, Pose
 from atlas.robot.odometry import Odometry
 from atlas.sensors import Lidar
@@ -79,6 +81,22 @@ class RelocalizationTrace:
     residuals: list[float]
     events: list[NavEvent]
     detected_cells: set[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class MappingTrace:
+    """Detailed record of one mapping-and-repair run."""
+
+    metrics: MappingMetrics
+    trajectory: list[tuple[float, float, float]]
+    filter_errors: list[float]
+    map_errors: list[int]
+    events: list[MapEvent]
+    prior_grid: OccupancyGrid
+    final_grid: OccupancyGrid
+    truth_grid: OccupancyGrid
+    added_cells: set[tuple[int, int]]
+    removed_cells: set[tuple[int, int]]
 
 
 def _plan(scenario: Scenario):
@@ -701,6 +719,183 @@ def run_relocalization(
     return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
 
 
+def simulate_mapping(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> MappingTrace:
+    """Build and repair a map while navigating on the estimate.
+
+    The robot starts from a prior map that may contain phantom obstacles and may
+    omit real ones. Every scan is integrated at the particle-filter estimate,
+    the planner replans when new evidence blocks the route or clears a phantom,
+    and the filter's likelihood field is rebuilt from the current map. Ground
+    truth is read only to score pose error and map error.
+    """
+    truth_world = scenario.world()
+    truth_raw = OccupancyGrid.from_world(
+        truth_world, resolution=scenario.resolution
+    )
+    prior_world = (
+        scenario.prior_world() if scenario.prior_world is not None
+        else scenario.world()
+    )
+    prior_raw = OccupancyGrid.from_world(
+        prior_world, resolution=scenario.resolution
+    )
+
+    mapping = LogOddsMap(
+        prior_raw,
+        max_range=LIDAR_RANGE,
+        max_beams=max(beams, 90),
+    )
+    planning = mapping.to_grid(scenario.inflation)
+    start_cell = nearest_free_cell(
+        planning, planning.world_to_cell(*scenario.start)
+    )
+    goal_cell = planning.world_to_cell(*scenario.goal)
+    if start_cell is None or not planning.is_free(goal_cell):
+        raise RuntimeError("slam scenario needs a free start and goal")
+    initial = a_star(planning, start_cell, goal_cell)
+    if not initial.found:
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+    initial_path = [planning.cell_to_world(cell) for cell in initial.path]
+
+    robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
+    sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        planning,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+    navigator = MappingNavigator(
+        mapping, goal_cell, inflation=scenario.inflation
+    )
+    if not navigator.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    map_errors: list[int] = []
+    executed = 0
+    last_version = -1
+
+    for step in range(scenario.max_steps):
+        estimate = pf.estimate()
+        scan = lidar.scan(truth_world, robot.pose)
+        command = navigator.step(estimate, scan, scenario.dt)
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(
+            command.v, command.w
+        )
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+        pf.update(scan)
+
+        if navigator.map_version != last_version:
+            pf.replace_grid(navigator.planning_grid())
+            last_version = navigator.map_version
+
+        estimate = pf.estimate()
+        filter_errors.append(math.hypot(
+            estimate.x - robot.pose.x,
+            estimate.y - robot.pose.y,
+        ))
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        )))
+        if step % 10 == 0:
+            map_errors.append(map_error(
+                mapping.occupancy,
+                truth_raw.blocked,
+                mapping.observed,
+            ))
+
+        if (
+            not ok
+            or navigator.goal_reached
+            or navigator.failed
+        ):
+            break
+
+    observed = mapping.observed
+    prior_error = map_error(
+        prior_raw.blocked, truth_raw.blocked, observed
+    )
+    final_error_cells = map_error(
+        mapping.occupancy, truth_raw.blocked, observed
+    )
+    reduction = prior_error - final_error_cells
+    repair_ratio = (
+        reduction / prior_error if prior_error > 0 else 1.0
+    )
+
+    goal_world = planning.cell_to_world(goal_cell)
+    metrics = MappingMetrics(
+        reached=navigator.goal_reached,
+        failed=navigator.failed or sim.collision_count > 0,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        final_error=math.hypot(
+            robot.pose.x - goal_world[0],
+            robot.pose.y - goal_world[1],
+        ),
+        replans=navigator.replan_count,
+        map_updates=navigator.map_updates,
+        added_cells=len(navigator.added_cells),
+        removed_cells=len(navigator.removed_cells),
+        known_ratio=mapping.known_ratio,
+        observed_ratio=mapping.observed_ratio,
+        prior_map_error=prior_error,
+        final_map_error=final_error_cells,
+        map_error_reduction=reduction,
+        map_repair_ratio=repair_ratio,
+        filter_rms=rms(filter_errors),
+        filter_max=max(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return MappingTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        filter_errors=filter_errors,
+        map_errors=map_errors,
+        events=list(navigator.events),
+        prior_grid=prior_raw,
+        final_grid=mapping.to_grid(0.0),
+        truth_grid=truth_raw,
+        added_cells=set(navigator.added_cells),
+        removed_cells=set(navigator.removed_cells),
+    )
+
+
+def run_mapping(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> ScenarioResult:
+    """Evaluate mapping and map repair during navigation."""
+    trace = simulate_mapping(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -717,6 +912,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_integrated(scenario, seed=seed)
     if scenario.kind == "relocalization":
         return run_relocalization(scenario, seed=seed)
+    if scenario.kind == "slam":
+        return run_mapping(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 
