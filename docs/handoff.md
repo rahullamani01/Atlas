@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 13 November 2026
-**Branch:** `main` (working tree; nothing pushed)
-**Latest work:** Phase 9 — kidnapped-robot relocalization
-**Tests:** 230 passing (`pytest`)
+**Date:** 14 November 2026
+**Branch:** `main` (Phase 10 pushed; working tree clean)
+**Latest work:** Phase 10 — occupancy mapping and map repair
+**Tests:** 230 Phase 0-9 tests were passing; Phase 10 tests added, verification deferred
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -22,6 +22,7 @@
 | 7 | Evaluation and metrics | complete |
 | 8 | Integrated autonomy | complete |
 | 9 | Kidnapped-robot relocalization | complete |
+| 10 | Occupancy mapping and map repair | implementation complete; verification pending |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -38,8 +39,12 @@ autonomy and relocalization on one set of scenarios across seeds, so regressions
 surface in a single command. The loop is closed: the particle-filter estimate
 drives the supervisor and the detector, and ground truth is used only to score
 error. A map-consistency monitor now notices a kidnapped robot, a coarse-to-fine
-global search reacquires the pose, and navigation resumes. The core roadmap and
-the optional relocalization extension are both complete.
+global search reacquires the pose, and navigation resumes. Phase 10 additionally
+builds and repairs the occupancy map from LiDAR while the robot drives: free rays
+erase phantom obstacles, endpoint hits add missing ones, and the planner replans
+against the repaired map. The core roadmap, the optional relocalization
+extension and the mapping/map-repair extension are implemented; Phase 10
+performance numbers are still awaiting their first verification run.
 
 ---
 
@@ -128,6 +133,8 @@ the optional relocalization extension are both complete.
   - `resample()`, `estimate()`, `position_std()`, `effective_sample_size`
   - `scan_residual(scan, pose=None)` — mean clipped scan-to-map distance at a
     pose, used by the Phase 9 lost detector
+  - `replace_grid(grid)` — swap the map and rebuild the distance field while
+    preserving particles and weights, used after Phase 10 map updates
   - noisy unicycle motion model; endpoint likelihood from the distance field;
     systematic resampling below `ESS < N/2`; roughening jitter
 - `src/atlas/localization/relocalization.py` (Phase 9)
@@ -174,6 +181,29 @@ the optional relocalization extension are both complete.
 - `nearest_free_cell(grid, cell, max_radius=12)` — ring search used to snap a
   replan start out of a new obstacle's clearance
 
+### Phase 10 — mapping and map repair (`src/atlas/mapping/`)
+- `LogOddsMap(prior, prior_occupied_log_odds=1.5, prior_free_log_odds=-0.75,
+  hit_log_odds=0.85, miss_log_odds=-0.45, min_log_odds=-4.0,
+  max_log_odds=4.0, occupied_threshold=0.0, max_range=10.0, max_beams=120,
+  free_margin=0.15, known=None)`
+  - `integrate(scan, pose) -> MapUpdate(changed, added, removed)` folds one
+    scan into the log-odds grid; free rays lower cells and endpoints raise them
+  - `occupancy`, `known_ratio`, `observed_ratio`, `to_grid(inflate_radius)`
+  - unknown cells are stored in `known` and treated as free by `to_grid`
+  - `surface_cells(blocked)` and `map_error(predicted, truth, mask=None)`
+    compare free-facing obstacle surfaces, optionally restricted to observed
+    cells
+- `MappingNavigator(occupancy_map, goal_cell, inflation=0.30, follower=None,
+  replan_interval=15)`
+  - `plan(pose)`, `replan(pose)`, `step(pose, scan, dt) -> Twist`
+  - integrates the scan, replans immediately when added evidence blocks the
+    route, periodically when removed evidence makes it stale, and stops safely
+    if no route survives
+  - `planning_grid()` caches `map.to_grid(inflation)` by `map_version`
+  - `path`, `events`, `plan_count`, `replan_count`, `map_updates`,
+    `added_cells`, `removed_cells`, `goal_reached`, `failed`
+- `route_length(path)` — polyline length helper
+
 ### Phase 7 — evaluation (`src/atlas/evaluation/`)
 - `metrics.py`
   - `rms(values)`, `segment_projection(point, a, b)`,
@@ -181,21 +211,22 @@ the optional relocalization extension are both complete.
   - `summarize(values) -> MetricSummary(count, mean, std, minimum, maximum)`
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
     `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
-    `IntegratedMetrics`, `RelocalizationMetrics`
+    `IntegratedMetrics`, `RelocalizationMetrics`, `MappingMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
-  - `Scenario(name, kind, world, start, goal, resolution, inflation, dt,
-    max_steps, controller, yaw_bias, inject_step, inject_rect, kidnap_step,
-    kidnap_pose)` with validation
-  - `demo_world()` returns a fresh 20 x 20 world per run
+  - `Scenario(name, kind, world, prior_world, start, goal, resolution,
+    inflation, dt, max_steps, controller, yaw_bias, inject_step, inject_rect,
+    kidnap_step, kidnap_pose)` with validation
+  - `demo_world()` returns a fresh 20 x 20 world per run; `slam_world()` and
+    `slam_prior_world()` supply the Phase 10 truth/prior pair
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
-  - eight scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
-    `localization`, `recovery`, `integrated`, `relocalization`
+  - nine scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+    `localization`, `recovery`, `integrated`, `relocalization`, `slam`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
-    `run_recovery`, `run_integrated`, `run_relocalization`
+    `run_recovery`, `run_integrated`, `run_relocalization`, `run_mapping`
   - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
     returns the trajectory, per-step odometry/filter/heading errors, detection
     counts, supervisor events and detected cells; the benchmark runner and the
@@ -204,6 +235,10 @@ the optional relocalization extension are both complete.
     detection, search, settling and resume sequence and returns the trajectory,
     per-step filter errors and residuals, events and detected cells; the
     benchmark runner and the Phase 9 demo both consume it
+  - `simulate_mapping(...) -> MappingTrace` runs the Phase 10 loop on a prior
+    map, returns the trajectory, filter errors, map-error timeline, map events,
+    prior/final/truth grids and added/removed cell sets; the benchmark runner
+    and the Phase 10 demo both consume it
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -233,6 +268,11 @@ the optional relocalization extension are both complete.
   resumes navigation. Plots the route and teleport, localization error and the
   map-consistency residual with all recovery events, and saves
   `experiments/plots/phase9_relocalization.png`.
+- `scripts/phase10_demo.py` — starts from a prior with a phantom and a missing
+  block, maps and repairs while driving, replans when the repaired map
+  invalidates the route, and plots the prior/final maps, added/removed cells,
+  map error and localization error. Saves
+  `experiments/plots/phase10_mapping.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -248,7 +288,9 @@ the optional relocalization extension are both complete.
   the Phase 8 integrated loop (estimate-frame projection, boundary band,
   integrated metrics) and the Phase 9 relocalization pipeline (scan residual,
   lost detection, coarse-to-fine search, out-of-bounds penalty,
-  multi-hypothesis accumulation, recovery sequence and metrics).
+  multi-hypothesis accumulation, recovery sequence and metrics), plus the
+  Phase 10 log-odds mapping model, observed-surface error, map-version
+  replanning loop and filter/map coupling.
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -256,7 +298,10 @@ the optional relocalization extension are both complete.
 
 ## 3. Verified numbers
 
-- 230 tests pass.
+- Phase 0-9 baseline: 230 tests pass. Phase 10 adds `test_mapping.py` and
+  `test_slam_evaluation.py` and extends `test_evaluation.py`; that combined
+  suite has not been executed yet because the authoring run deliberately
+  skipped all test/demo execution.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -291,8 +336,8 @@ the optional relocalization extension are both complete.
   - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
   - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
     collision
-- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs; the suite now has 8
-  scenarios and 24 runs):
+- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs; the suite now has 9
+  scenarios and 27 runs):
   - kinematics: Euler `2.10e-4 m`, midpoint `8.76e-7 m`, exact `6.27e-15 m`
     over one circle
   - planning: A* cost `29.021 m`, 103 waypoints, 1,074 vs 4,465 cells expanded
@@ -324,6 +369,10 @@ the optional relocalization extension are both complete.
   - deterministic metrics repeat to floating-point precision (aggregate std at
     most ~1e-17); wall-clock planner times vary and are not part of the
     reproducibility claim
+- Phase 10 benchmark — **pending verification**. Acceptance targets only:
+  goal reached, zero collisions, at least one replan, non-zero added and
+  removed cells, lower observed-surface map error than the prior, and filter
+  position RMS below `0.5 m`. No measured Phase 10 values are claimed yet.
 
 ---
 
@@ -357,6 +406,7 @@ python scripts/phase5_demo.py
 python scripts/phase6_demo.py
 python scripts/phase8_demo.py
 python scripts/phase9_demo.py
+python scripts/phase10_demo.py
 python scripts/evaluate.py
 ```
 
@@ -394,8 +444,8 @@ Repository workflow used so far:
 7. **Replanning reacts only to newly observed cells.** Paths are replanned when
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
-8. **The evaluation suite is deliberately small.** One map, one route, seven
-   scenario kinds, eight scenarios and three seeds. It is a regression harness,
+8. **The evaluation suite is deliberately small.** One map, one route, eight
+   scenario kinds, nine scenarios and three seeds. It is a regression harness,
    not a broad robotics benchmark; aggregation reports descriptive statistics
    only.
 9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
@@ -409,7 +459,8 @@ Repository workflow used so far:
 11. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
     is independent Gaussian rather than range-dependent with outliers.
 12. **Detection only adds observed surfaces.** Occluded parts of a new obstacle
-    stay unknown and the map is never repaired if the world changes elsewhere.
+    stay unknown. Phase 10 adds log-odds map repair for observed cells, but
+    there is still no global map correction for regions the robot never visits.
 13. **The likelihood is annealed.** `likelihood_scale = 0.2` keeps the cloud
     from collapsing but means the posterior is not calibrated and the reported
     particle spread underestimates true error.
@@ -418,10 +469,13 @@ Repository workflow used so far:
 15. **The Phase 6 demo still uses ground-truth pose** to isolate perception and
     recovery. Phase 8 closes that gap with `integrated`, which drives the same
     supervisor from the particle-filter estimate.
-16. **The integrated filter still scores against the static map.** The dynamic
-    map feeds planning and detection, not the measurement likelihood. A
-    prototype that rebuilt the likelihood field from the dynamic map made filter
-    RMS slightly worse in this scenario, so it was not adopted.
+16. **The integrated filter still scores against the static map.** In the
+    Phase 6/8 `integrated` scenario the dynamic map feeds planning and detection,
+    not the measurement likelihood. A prototype that rebuilt the likelihood
+    field from the dynamic map made filter RMS slightly worse in that scenario,
+    so it was not adopted there. Phase 10 takes the other path explicitly:
+    `slam` rebuilds the field from the repaired log-odds map because mapping is
+    the point of the scenario.
 17. **The boundary band is geometric, not covariance-aware.** A fixed
     `tolerance + 1` cell band along world edges suppresses false detections from
     pose error, at the cost of sensitivity near walls. Detection tolerance is
@@ -430,8 +484,8 @@ Repository workflow used so far:
     map, a free kidnap pose, a stationary in-place rotation, and fixed residual
     thresholds. It is stress-tested on several poses during development but the
     benchmark uses one kidnap pose; symmetry failures remain possible in a
-    repetitive map. There is no loop closure, no SLAM and no relocalization
-    while driving.
+    repetitive map. Phase 10 adds mapping and map repair, but there is still no
+    loop closure or pose-graph SLAM, and no relocalization while driving.
 19. **Dynamic-map cells are discarded on recovery.** `resume()` clears the
     dynamic map because cells confirmed in the old pose frame are phantom
     obstacles in the new one. This is correct for a kidnap, but it also throws
@@ -441,6 +495,21 @@ Repository workflow used so far:
     `patience = 8` are tuned for the benchmark's 0.02 m range noise. A
     range-dependent threshold derived from particle spread would generalize
     better, at the cost of more machinery.
+21. **Phase 10 is map repair, not full SLAM.** There is no pose-graph loop
+    closure, no joint pose-map posterior and no revisit correction. The map is
+    built at the current filter estimate, so pose drift still smears geometry on
+    long routes.
+22. **Mapping needs a prior.** `LogOddsMap` repairs an occupancy grid supplied by
+    the caller. It does not solve the "no map at all" problem and has no active
+    exploration policy; coverage is whatever navigation happens to observe.
+23. **The inverse sensor model is fixed and uncalibrated.** Log-odds increments
+    do not depend on range, incidence angle or beam width, and the map assumes a
+    static world. Moving obstacles appear as smears rather than tracked objects.
+24. **The mapping metric is observed-surface error.** It masks out unvisited
+    cells by design, so it measures repair of what was seen, not global map
+    accuracy. Phase 10 has also not been measured yet: the implementation,
+    tests and demo were committed under an explicit no-run policy, and the
+    benchmark, demo and combined test suite still need their first execution.
 
 ---
 
@@ -868,8 +937,78 @@ heading RMS, `0.063 m` final error, zero collisions.
 
 ---
 
-## 14. Working agreement
+## 14. Phase 10 — Occupancy mapping and map repair (implementation complete, verification pending)
 
-Keep the existing conventions and do not change Phase 0-8 behaviour; the
-current 230-test suite is the regression baseline. Commit implementation first,
-docs and demo second. Do not push to `origin` until explicitly approved.
+**Outcome:** the map is no longer assumed known and static. `LogOddsMap` fuses
+LiDAR at the particle-filter estimate, using free rays as negative evidence and
+endpoint hits as positive evidence. A phantom obstacle fades as the robot sees
+through it, and an obstacle omitted from the prior is added when a beam reaches
+it. `MappingNavigator` plans on the inflated repaired map, replans immediately
+when added cells block the route, periodically when removed cells make it stale,
+and stops safely if no route survives. `ParticleFilter.replace_grid()` rebuilds
+the likelihood field after each map change. In the new `slam` scenario the prior
+contains a phantom rectangle and omits a block in the wall gap; the robot must
+repair both and still reach the goal.
+
+### Goal
+Remove the Phase 9 limitation that the map is static and trusted: build and
+repair the occupancy map from LiDAR, and let planning and localization consume
+the evolving map without ever reading ground truth for a decision.
+
+### Implemented scope
+1. `src/atlas/mapping/occupancy_map.py` — `MapUpdate`, `surface_cells`,
+   `map_error`, and `LogOddsMap` (prior log-odds, free/hit ray integration,
+   clamping, known/observed masks, occupancy threshold, planning-grid export).
+2. `src/atlas/mapping/navigator.py` — `MapEvent`, `MappingNavigator` (plan,
+   cached planning grid by `map_version`, urgent/best-effort replanning,
+   added/removed cell tracking, safe failure) and `route_length`.
+3. `ParticleFilter.replace_grid(grid)` — swap the map and rebuild the distance
+   field while preserving particles and weights.
+4. `MappingMetrics`, `MappingTrace`, `simulate_mapping`, `run_mapping`,
+   dispatcher entry and exports.
+5. `Scenario.prior_world`, `slam_world()`, `slam_prior_world()`, the `slam`
+   scenario and `KINDS` / scenario-registry updates.
+6. `tests/test_mapping.py` and `tests/test_slam_evaluation.py`, plus
+   `tests/test_evaluation.py` updates for the new kind, name and `prior_world`
+   validation.
+7. `scripts/phase10_demo.py` — prior vs repaired map, added/removed cells,
+   trajectory, map-error timeline and localization timeline.
+8. Docs: `docs/mathematics.md` section 19 and the Phase 10 section of
+   `docs/design_decisions.md`.
+
+### Acceptance targets (not yet verified)
+- The robot reaches the goal with zero collisions.
+- At least one replan follows the map change.
+- `added_cells` and `removed_cells` are both non-zero.
+- `final_map_error < prior_map_error` on the observed surface.
+- Filter position RMS stays below `0.5 m`.
+- Phase 0-9 behaviour and the 230-test baseline remain unchanged.
+
+### Deliberate simplifications
+- Mapping runs at the estimated pose. This is not full SLAM: there is no joint
+  pose-map posterior and no loop closure.
+- A prior occupancy grid is required. The module repairs a map; it does not
+  build one from an unknown world or choose where to explore.
+- The inverse sensor model uses fixed log-odds increments with no range,
+  incidence or beam-width dependence, and the world is assumed static.
+- The map metric compares observed obstacle surfaces only, masked to cells the
+  robot actually saw. It is a repair indicator, not global map accuracy.
+- One scenario and one route are benchmarked.
+
+### Verification status
+No `pytest` run, benchmark run or demo run was performed while authoring Phase
+10; only syntax/import checks were used. The Phase 10 tests, demo and acceptance
+numbers therefore remain open. The first verification run should execute
+`pytest` and `python scripts/phase10_demo.py`, confirm the Phase 0-9 baseline is
+unchanged, then record the measured Phase 10 numbers in section 3 and in
+`docs/mathematics.md` section 19.6.
+
+---
+
+## 15. Working agreement
+
+Keep the existing conventions and do not change Phase 0-9 behaviour; the
+230-test Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top
+of that baseline, but the combined suite has not been executed yet. Commit
+implementation first, docs and demo second. Push only when the user explicitly
+asks, and never present unverified Phase 10 numbers as measured results.

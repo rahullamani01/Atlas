@@ -1490,6 +1490,257 @@ That number is intentionally not a success metric for this scenario.
    generalize better.
 7. **One map, one route, three seeds.** As with the rest of the benchmark, this
    is a regression target rather than a broad evaluation.
-8. **No loop closure or map repair.** If the world genuinely changes, the
-   search will match the static map, and repeated failures are not escalated to
-   a mapping behaviour.
+8. **No loop closure or map repair in this phase.** The search scores against
+   the static map, and repeated failures are not escalated to a mapping
+   behaviour. Phase 10 addresses map repair, but loop closure remains out of
+   scope.
+
+## 19. Occupancy mapping and map repair (Phase 10)
+
+Phases 5-9 score every scan against a map that is assumed correct. A phantom
+obstacle makes the robot avoid free space, and a missing obstacle makes it plan
+straight through solid geometry. Phase 10 treats the map as a random field that
+LiDAR updates: free space is evidence against occupancy, and an endpoint is
+evidence for it. The same filter that localizes the robot then feeds the map,
+and the planner consumes the repaired map.
+
+This is mapping and map repair at the estimated pose, not full SLAM. There is no
+joint posterior over poses and the map and no pose-graph loop closure. The
+distinction is deliberate and is restated in section 19.7.
+
+### 19.1 Log-odds occupancy
+
+For a cell `m`, let
+
+```text
+L(m) = log( p(m = occupied) / (1 - p(m = occupied)) )
+```
+
+so `L = 0` is an even bet, `L > 0` favours occupied and `L < 0` favours free.
+The map starts from the prior occupancy grid with
+
+```text
+L_prior(m) = +1.5    if the prior marks m occupied
+L_prior(m) = -0.75   if the prior marks m free
+```
+
+A positive prior is not symmetric with the free prior because the downstream
+planner is conservative: an unobserved occupied cell is safer than an
+unobserved free one. The benchmark then applies an independent beam model. For
+beam `k` from sensor origin `o` at world angle `a`, with measured range `r` and
+maximum range `R`:
+
+```text
+hit  = r < R - epsilon
+free_length = r - free_margin    if hit
+free_length = r                  otherwise
+```
+
+Every grid cell crossed by the ray up to `free_length` receives
+
+```text
+L(m) <- L(m) + l_miss,        l_miss = -0.45
+```
+
+and the cell containing the endpoint
+
+```text
+e = o + r [cos a, sin a]
+```
+
+receives
+
+```text
+L(m) <- L(m) + l_hit,         l_hit = +0.85
+```
+
+The update is clamped to `[-4.0, +4.0]` to bound the influence of any one cell
+and keep the map responsive to later evidence. Occupancy is the threshold
+
+```text
+occupied(m) = known(m) and L(m) > 0
+```
+
+A cell with `L = 0` is not occupied; unknown cells are stored explicitly in a
+boolean `known` mask. The default prior marks the whole raster known, so
+`known_ratio = 1`. The planning grid maps unknown cells to free. That optimism
+is intentional: the planner should not refuse a route merely because the robot
+has not looked there yet. The cost is that an unknown obstacle can invalidate a
+route later, which is exactly what the replanning loop is for.
+
+Rays are sampled every half cell rather than with a closed-form grid traversal.
+The sample indices within one beam are deduplicated, so a cell crossed twice by
+the same beam is penalised once. Incidences from different beams still add,
+which lets a surface observed by several returns become occupied faster than a
+grazing ray suggests.
+
+With these constants, one hit on a prior-free cell gives `-0.75 + 0.85 = +0.10`
+and therefore adds it to the map. A prior-occupied phantom cell at `+1.5` needs
+four independent misses to reach `1.5 - 4(0.45) = -0.30` and disappear. The
+asymmetry is useful in this scenario: a missed obstacle is added quickly, while
+a phantom is removed only after repeated free observations. The free margin of
+`0.15 m` keeps the ray from carving the cell that the same beam reports as
+occupied, which would otherwise cancel the hit at the endpoint.
+
+### 19.2 Map repair as an observed-surface error
+
+A mapped obstacle is reconstructed from returns, so its interior is not
+observed; only its free-facing surface is. Comparing a mapped grid with a solid
+rasterised obstacle over all blocked cells would count every unobserved
+interior cell as an error and understate repair. The metric therefore restricts
+the comparison to surface cells: blocked cells with at least one free
+four-neighbour. For predicted map `P` and truth `T`, both restricted to surface
+sets `S(P)` and `S(T)`,
+
+```text
+E(P, T) = | (S(P) symmetric-difference S(T)) and observed |
+```
+
+The `observed` mask contains every cell the robot has carved or hit. Without it,
+a phantom that the robot never approached would count as an error for both maps,
+and a genuine repair in the visited region would look small. With it, the metric
+answers the question that matters during operation: over the part of the world
+the robot has actually measured, how many surface cells are wrong?
+
+The headline repair number is
+
+```text
+repair_ratio = (E_prior - E_final) / E_prior
+```
+
+when `E_prior > 0`, and `1.0` when the prior is already perfect. It is a
+fraction of the observable prior error that mapping removed, not a global map
+accuracy claim.
+
+### 19.3 Planning on the evolving map
+
+`MappingNavigator` wraps a `PathFollower` and a `LogOddsMap`. The default
+inflation is the scenario's `0.30 m`, matching the body radius plus margin used
+elsewhere. On each control step it
+
+1. integrates the scan at the pose estimate,
+2. bumps a `map_version` counter when the occupancy changed,
+3. replans if newly added cells intersect the current route,
+4. otherwise replans on a fixed interval when phantom cells were removed,
+5. follows the current route with the existing carrot-chasing controller.
+
+The planning grid is
+
+```text
+G_t = inflate( threshold(L_t), inflation )
+```
+
+and is cached until `map_version` changes. Inflation is computed by the same
+`OccupancyGrid.inflated` routine as Phases 2-9, so the clearance claim is
+identical.
+
+The replan policy separates the urgent case from the cosmetic one. Added
+evidence that blocks the route is safety-critical and triggers an immediate
+replan. Removed evidence makes the old route valid but possibly longer; it
+triggers at most one best-effort replan per `replan_interval` steps. A failed
+best-effort replan keeps the old path. A failed urgent replan stops the robot
+and sets `failed`, never a collision. The navigator also refuses to plan when
+the goal itself has become blocked, which can happen if a map update adds cells
+around the goal; this is a guard rather than a scenario expectation.
+
+The start cell for planning is snapped to the nearest free cell, reusing the
+recovery module's `nearest_free_cell`. This matters when newly added inflation
+surrounds the estimated pose: the planner needs a valid graph node, but the
+controller still uses the true estimate.
+
+### 19.4 Coupling the filter to the repaired map
+
+The particle filter scores endpoints against a precomputed distance field built
+from one grid. If the map changes and the field does not, newly discovered
+obstacles keep scoring as measurement outliers even after they are in the map.
+`ParticleFilter.replace_grid(grid)` swaps the grid, rebuilds the
+`DistanceField`, and leaves the particles and weights untouched. The harness
+calls it whenever `map_version` changes.
+
+This is a pragmatic split. The map is updated in the mapping module at the
+filter estimate, and the filter consumes the updated map without trying to
+infer a joint pose-map posterior. The loop is therefore:
+
+```text
+scan + estimate -> LogOddsMap -> planning grid -> MappingNavigator
+                      |                              |
+                      +--> replace_grid --> ParticleFilter
+```
+
+### 19.5 Scenario and metrics
+
+The `slam` scenario uses the standard 20 x 20 world as truth but gives the robot
+a different prior:
+
+- truth contains a block at `(6, 14, 7, 15)`, in the gap above the long wall;
+- the prior omits that block;
+- the prior contains a phantom rectangle at `(1.0, 5.0, 2.2, 8.0)` that is free
+  in truth.
+
+The start is `(1.125, 1.125)` and the goal `(18.125, 18.125)`, with the same
+`0.25 m` raster and `0.30 m` inflation as the other navigation scenarios. The
+prior route must detour around the phantom and crosses the wall gap at the
+height where the missing block sits, so the scenario exercises both directions
+of repair and a route change.
+
+`MappingMetrics` reports the navigation outcome plus:
+
+```text
+map_updates              steps whose occupancy changed
+added_cells              unique cells that became occupied
+removed_cells            unique cells that became free
+known_ratio              fraction of the map marked known
+observed_ratio           fraction carved or hit
+prior_map_error          E_prior on the finally observed surface
+final_map_error          E_final on the same surface
+map_error_reduction      E_prior - E_final [cells]
+map_repair_ratio         reduction / E_prior
+filter_rms, filter_max   position error against truth [m]
+filter_heading_rms_deg   heading error against truth [deg]
+```
+
+The error timeline is sampled every ten steps and uses the observed mask at that
+moment. It is a diagnostic curve, not a monotone guarantee: newly observed
+regions can add error later, and a moving surface can flicker.
+
+### 19.6 Measured results
+
+**Pending.** The Phase 10 implementation, tests and demo were authored with an
+explicit no-run instruction, so this document does not report measured map
+repair, runtime, localization error or added/removed cell counts. The
+acceptance targets are:
+
+- the robot reaches the goal with zero collisions;
+- at least one replan follows the map change;
+- both `added_cells` and `removed_cells` are non-zero;
+- observed-surface map error falls (`final_map_error < prior_map_error`);
+- filter position RMS stays consistent with Phases 8-9 (well below `0.5 m`).
+
+Run `python scripts/phase10_demo.py` and `pytest` to fill in the table. Until
+then, no Phase 10 number should be treated as a regression baseline.
+
+### 19.7 Limitations
+
+1. **No loop closure and no pose-graph optimization.** The map is built at the
+   particle-filter estimate. Small pose errors accumulate into a smeared map on
+   a long loop, and revisiting a place does not correct earlier geometry. This
+   phase delivers map repair, not full SLAM.
+2. **A prior map is still required.** The module repairs an existing grid; it
+   does not build a map from an unknown world or decide where to explore.
+3. **Static-world assumption.** Occupancy is a per-cell log-odds with no object
+   persistence or dynamics. A moving obstacle leaves hits along its path and
+   free evidence behind it, which appears as a smear rather than a tracked
+   object.
+4. **Simple inverse sensor model.** Log-odds increments are fixed constants with
+   no range-dependent uncertainty, beam-width model or ray-cast-through-
+   uncertainty treatment. This keeps the update vectorisable and explainable,
+   but it is not a calibrated probabilistic sensor model.
+5. **Surface-only scoring.** The map error deliberately ignores obstacle
+   interiors and unobserved regions. It measures repair of what was observed,
+   not global map accuracy.
+6. **Coverage is passive.** The route is chosen for navigation, not for
+   information gain, so cells far from the route remain at their prior values.
+7. **Single scenario, single route.** As with the rest of the benchmark, this is
+   a regression target rather than a broad evaluation of mapping performance.
+8. **Verification is deferred.** The no-run policy means the measured numbers in
+   section 19.6 are still open.

@@ -322,3 +322,82 @@
   compound the error.
 - The scenario remains seeded and deterministic. The kidnap step and pose are
   fixed, and LiDAR noise and particle sampling come from the seed.
+
+## Occupancy mapping and map repair (Phase 10)
+
+- Mapping lives in its own package (`mapping/occupancy_map.py` and
+  `mapping/navigator.py`) rather than being folded into the particle filter or
+  the recovery supervisor. Localization estimates a pose; mapping estimates
+  occupancy; planning consumes occupancy. Keeping those boundaries explicit
+  means each can be tested and replaced separately.
+- The map is **log-odds occupancy**, not a second dynamic-obstacle detector. The
+  Phase 6 `DynamicObstacleMap` only adds confirmed surprises to a known grid; it
+  has no mechanism to remove a phantom. A log-odds map uses every free ray as
+  negative evidence, so the same update grows free space and repairs stale
+  occupied cells.
+- Free rays are integrated, not just endpoints. Hit-only mapping can add a
+  missing obstacle but can never clear a phantom. The scenario deliberately
+  contains both errors so the test would fail if either direction were absent.
+- The prior is asymmetric: occupied `+1.5`, free `-0.75`, with hit `+0.85` and
+  miss `-0.45`, clamped to `+/-4.0`. One hit marks a prior-free cell occupied
+  (`+0.10`), while a phantom needs four free observations (`-0.30`). This trades
+  a fast response to new obstacles against resistance to a single stray miss.
+  The constants are tuned for the 0.25 m raster and are documented as a simple
+  inverse sensor model, not a calibrated one.
+- Rays stop `0.15 m` short of a hit before carving free space. Without the
+  margin a beam can mark its own endpoint free and cancel the hit; the symptom
+  is a map that flickers instead of converging.
+- Ray samples are deduplicated per beam, so one beam crossing a cell twice does
+  not double-count the miss. Evidence from separate beams still accumulates,
+  which makes repeatedly observed surfaces stable.
+- Unknown cells are treated as **free for planning**. Refusing to plan into
+  unexplored space would make the robot unable to leave its first corridor. The
+  price is that an unknown obstacle can invalidate a route later, which is why
+  the navigator replans on added evidence.
+- Map error is compared on **surface cells only**, masked to cells the robot
+  actually observed. A reconstructed obstacle has no observable interior;
+  counting interiors would penalise every correct map by the same constant.
+  Masking to observed cells prevents untouched regions from diluting the repair
+  number.
+- `map_repair_ratio` is reported as a fraction of the observable prior error,
+  not as global map accuracy. A perfect prior reports `1.0`; a prior with no
+  observable error has nothing to repair.
+- The planning grid is cached by `map_version` and rebuilt only when occupancy
+  changes. Ray integration runs every control step, but inflation and grid
+  construction are comparatively expensive and most scans change little.
+- Added evidence that blocks the route triggers an **immediate** replan.
+  Removed evidence triggers at most one best-effort replan per interval, because
+  the old route is still valid. Keeping these cases separate avoids both
+  driving into a newly observed obstacle and replanning every step while a
+  phantom fades.
+- A failed urgent replan is an explicit stop with zero command, matching the
+  Phase 6 recovery philosophy. A failed cosmetic replan keeps the previous
+  path. The navigator also refuses to search when the goal has become blocked,
+  instead of letting `a_star` raise on a blocked endpoint.
+- `ParticleFilter.replace_grid()` swaps the grid and rebuilds the distance field
+  but preserves particles and weights. The measurement model must score scans
+  against the map the robot currently believes, otherwise a newly added
+  obstacle keeps looking like an outlier and localization degrades after a
+  successful repair.
+- Mapping is performed at the **estimated pose**, not at ground truth, and the
+  same mapping navigator drives the robot. The harness reads truth only to score
+  pose and map error. This is what makes the scenario an autonomy test rather
+  than a mapping-only test.
+- There is **no joint pose-map posterior and no loop closure**. The particle
+  filter and log-odds map are coupled one way: the filter supplies a pose, the
+  map supplies a likelihood field. Full SLAM would require a pose graph or a
+  Rao-Blackwellized filter, which is out of scope and is stated as the key
+  remaining limitation.
+- The `slam` scenario adds `RectObstacle(6, 14, 7, 15)` to truth and omits it
+  from the prior, while the prior contains a phantom
+  `RectObstacle(1.0, 5.0, 2.2, 8.0)`. The block sits in the wall gap on the
+  prior route, so discovering it forces a replan; the phantom sits beside the
+  early route, so clearing it changes the route without being required for
+  safety.
+- `MappingMetrics` is a separate flat dataclass from `NavigationMetrics` and
+  `RelocalizationMetrics`. Map counts and repair ratios do not belong in the
+  generic navigation schema, and the JSON/CSV format stays one row per scenario.
+- Phase 10 was authored with an explicit **no-run policy**: syntax and import
+  checks only. The demo, tests and measured table were added so the first
+  verification run is a single command, but no Phase 10 number is claimed as
+  verified yet.

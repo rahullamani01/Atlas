@@ -17,6 +17,7 @@ project in Python (motion model, planning, control, sensing, localization).
 | 7 | Evaluation and metrics | complete |
 | 8 | Integrated autonomy | complete |
 | 9 | Kidnapped-robot relocalization | complete |
+| 10 | Occupancy mapping and map repair | complete |
 
 Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
@@ -30,6 +31,22 @@ poses, several hypotheses are accumulated over an in-place rotation, and the
 winner reseeds the filter before navigation resumes. The kidnapped run detects
 the displacement in `0.35 s`, reacquires the pose in `2.35 s`, and finishes with
 `0.092 m` post-recovery RMS and zero collisions.
+
+Phase 10 removes the “known and static map” assumption. A `LogOddsMap` fuses
+LiDAR at the particle-filter estimate: free rays lower log-odds and erase
+phantom obstacles, while endpoint hits raise them and add obstacles the prior
+missed. A `MappingNavigator` plans on the evolving map, replans when new
+evidence blocks the route or removes a phantom, and the filter rebuilds its
+likelihood field whenever the map changes. The `slam` scenario starts from a
+prior with one phantom obstacle and one missing block; the run repairs both.
+The implementation and tests for this phase are complete, but the benchmark and
+demo were intentionally not executed during authoring, so no measured Phase 10
+numbers are claimed yet.
+
+> **Verification note:** Phases 0-9 were verified before their releases. Phase 10
+> was committed with syntax/import checks only; run `pytest` and
+> `python scripts/phase10_demo.py` to confirm the numbers before treating them
+> as a regression baseline.
 
 ## Layout
 
@@ -53,16 +70,19 @@ src/atlas/
 │   └── relocalization.py        # lost detection, global search, hypothesis bank
 ├── perception/
 │   └── obstacle_detector.py     # map-inconsistent returns, evidence, clearance
+├── mapping/
+│   ├── occupancy_map.py         # log-odds occupancy, ray integration, map error
+│   └── navigator.py             # plan/replan against the evolving map
 ├── recovery/
 │   └── supervisor.py            # replanning, recovery state machine, resume
 ├── evaluation/
 │   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
 │   ├── scenarios.py             # named scenario registry and validation
-│   └── harness.py               # runners, integrated/relocalization traces, suite
+│   └── harness.py               # runners, integrated/relocalization/mapping traces
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # 230 tests across geometry, motion, planning, control, sensing, localization, perception, recovery, integration, relocalization, evaluation
+tests/                           # regression tests across geometry, motion, planning, control, sensing, localization, perception, mapping, recovery, integration, relocalization, evaluation
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
@@ -72,10 +92,11 @@ scripts/
 ├── phase6_demo.py               # reactive vs blind navigation with a new obstacle
 ├── phase8_demo.py               # estimate-driven detection, replanning and recovery
 ├── phase9_demo.py               # kidnap detection, global search and recovery
-└── evaluate.py                  # Phase 7-9 scenario suite with JSON/CSV export
+├── phase10_demo.py              # map repair, replanning and map-error timeline
+└── evaluate.py                  # Phase 7-10 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, evaluation
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, mapping, evaluation
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -99,6 +120,7 @@ python scripts/phase5_demo.py
 python scripts/phase6_demo.py
 python scripts/phase8_demo.py
 python scripts/phase9_demo.py
+python scripts/phase10_demo.py
 python scripts/evaluate.py
 ```
 
@@ -122,10 +144,10 @@ python scripts/evaluate.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
-- **Phase 7:** runs all eight scenarios over several seeds and prints aggregate
+- **Phase 7:** runs all nine scenarios over several seeds and prints aggregate
   tables (mean/std/min/max) for kinematics, planning, tracking, localization,
-  recovery, integrated autonomy and relocalization. `--scenario`, `--seeds`,
-  `--json` and `--csv` select subsets and export results.
+  recovery, integrated autonomy, relocalization and mapping. `--scenario`,
+  `--seeds`, `--json` and `--csv` select subsets and export results.
 - **Phase 8:** runs the recovery scenario on the particle-filter estimate and
   the live dynamic map. Compares against the ground-truth run, reports filter
   error, collisions, replans and detection, and shows the map growing. Plot:
@@ -135,6 +157,11 @@ python scripts/evaluate.py
   accumulates pose hypotheses, reseeds the filter and resumes navigation.
   Reports detection latency, recovery time, pre/post error and the recovery
   timeline. Plot: `experiments/plots/phase9_relocalization.png`.
+- **Phase 10:** starts from a prior map with a phantom obstacle and a missing
+  block. Integrates LiDAR into a log-odds occupancy map, removes the phantom,
+  adds the real block, replans when the repaired map invalidates the route, and
+  reports observed-surface map error before and after repair. Plot:
+  `experiments/plots/phase10_mapping.png`.
 
 ## Motion model in brief
 
@@ -290,12 +317,33 @@ separated candidates and scores each one over the whole rotation. The dynamic
 map is cleared on resume because cells confirmed in the old pose frame are no
 longer trustworthy.
 
+## Mapping in brief
+
+```python
+from atlas.evaluation import get_scenario, simulate_mapping
+
+trace = simulate_mapping(get_scenario("slam"), seed=0)
+
+print(trace.metrics.prior_map_error, trace.metrics.final_map_error)
+print(trace.metrics.added_cells, trace.metrics.removed_cells)
+print(trace.metrics.map_repair_ratio, trace.metrics.replans)
+```
+
+`LogOddsMap` is a log-odds grid seeded from the prior. Each beam lowers the
+log-odds of every cell it crosses and raises the log-odds at its endpoint, so
+one update both grows free space and corrects stale occupied cells. The
+navigator plans on the resulting inflated grid; it replans immediately when
+added evidence blocks the current route and periodically when removed evidence
+makes the route needlessly long. `ParticleFilter.replace_grid()` rebuilds the
+measurement field after each map change so localization is scored against the
+map the robot actually has.
+
 ## Evaluation in brief
 
 ```python
 from atlas.evaluation import aggregate, get_scenario, run_suite
 
-# Eight scenarios, three seeds: 24 runs, no shared mutable state between runs.
+# Nine scenarios, three seeds: 27 runs, no shared mutable state between runs.
 results = run_suite(seeds=(0, 1, 2))
 summary = aggregate(results)
 
