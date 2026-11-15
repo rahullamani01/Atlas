@@ -401,3 +401,59 @@
   checks only. The demo, tests and measured table were added so the first
   verification run is a single command, but no Phase 10 number is claimed as
   verified yet.
+
+## Pose-graph SLAM and loop closure (Phase 11)
+
+- **Odometry, not filter poses, are the graph nodes.** The particle filter
+  already removes local drift for control, so a graph built on its poses would
+  have almost nothing to correct. Wheel odometry is the drifting input a SLAM
+  back-end exists to fix, and the before/after comparison is then meaningful.
+  Navigation is untouched: the filter still drives the supervisor/navigator.
+- **The back-end is offline.** `simulate_slam` records odometry, scans,
+  estimates and truth, then runs detection, optimisation and map rebuild after
+  the drive. This keeps the live loop unchanged and makes the phase testable in
+  isolation. Incremental optimisation and feeding the correction back into
+  control are explicitly left for later.
+- **Loop closures are verified by matching against the prior map.** Proximity
+  alone is not evidence: two corridor legs can pass within metres without being
+  the same place. A scan match must score below `0.25 m` mean endpoint
+  distance. The measurement is `relative(old_pose, matched_pose)` so the
+  optimiser can pull the chain onto the map.
+- **`min_gap = 80` nodes** (400 steps, 20 s at 20 Hz) is deliberate. With a
+  smaller gap the run produced many short-range constraints whose small match
+  errors were mutually inconsistent; node RMS worsened (up to 2.9 m in
+  parameter sweeps). A long gap keeps the genuine return-to-start closure, where
+  the old node itself has little drift. This is a tuned constant, not a general
+  place-recognition rule, and is listed as a limitation.
+- **The first node is fixed** to remove gauge freedom. Without it the normal
+  equations are singular: translating and rotating the whole graph leaves every
+  residual unchanged.
+- **Finite-difference Jacobians.** Graphs here hold ~100 nodes and ~110 edges,
+  so dense `3n × 3n` normal equations are small. Numeric derivatives avoid a
+  large block of hand-derived SE(2) algebra that is easy to get subtly wrong,
+  and the tests pin the result instead.
+- **Loop edges are weighted 5× odometry.** Odometry increments are exact
+  relative measurements of a drifting chain; loop edges carry map-referenced
+  information and should dominate locally. Sweeps from 1× to 20× changed the
+  result only marginally once the time gap was correct.
+- **Translation and rotation residuals share one weight.** No per-edge
+  covariance is estimated. This is simple and works for the scenario, but it is
+  not a calibrated information matrix.
+- **Maps are rebuilt from node scans, not every scan.** Nodes occur every five
+  control steps (0.25 s); replaying node scans into a fresh `LogOddsMap` at the
+  corrected poses is enough to show the smear disappear without storing and
+  replaying the full scan stream.
+- **Map comparison uses the intersection of observed masks.** Raw and corrected
+  maps see slightly different cells because their poses differ; scoring each on
+  its own mask would compare different areas. The intersection keeps the
+  comparison like-for-like.
+- **The `loop` scenario uses a correct prior.** Phase 10 already tests map
+  repair against a wrong prior. Phase 11 isolates the back-end, so the prior is
+  exact and the wall between start and goal forces a route that returns within
+  ~2 m of the start with a 2% wheel-scale mismatch producing ~1 m of drift.
+- **One scenario and one route.** As with earlier phases this is a regression
+  target, not a broad SLAM benchmark. Symmetric worlds, dynamic objects and
+  multiple loops are out of scope.
+- **Verified, unlike Phase 10.** The Phase 11 tests, demo and three-seed
+  benchmark were run during authoring; the measured table is in
+  `docs/mathematics.md` §20.9. Phase 10's verification debt is unchanged.

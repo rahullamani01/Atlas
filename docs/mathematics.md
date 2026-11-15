@@ -1744,3 +1744,225 @@ then, no Phase 10 number should be treated as a regression baseline.
    a regression target rather than a broad evaluation of mapping performance.
 8. **Verification is deferred.** The no-run policy means the measured numbers in
    section 19.6 are still open.
+
+---
+
+## 20. Pose-graph SLAM and loop closure (Phase 11)
+
+### 20.1 Why a back-end
+
+Phase 10 repairs the map at the current pose estimate, so any pose error is
+baked into the geometry it observes. Over a loop the error accumulates and the
+map smears; when the robot returns to a place it has already seen, nothing
+forces the new observations to agree with the old ones. Phase 11 adds that
+constraint explicitly, then corrects the whole trajectory before rebuilding the
+map.
+
+The live navigation loop is unchanged. The particle filter still drives control
+and the mapping navigator still plans. The back-end consumes the same run's
+wheel odometry, scans and estimates.
+
+### 20.2 SE(2) composition and relative pose
+
+A pose is `p = (x, y, θ)`. Composition applies a relative transform `r` to a
+frame `a`:
+
+```text
+a ⊕ r = ( a.x + cos(a.θ) r.x - sin(a.θ) r.y,
+          a.y + sin(a.θ) r.x + cos(a.θ) r.y,
+          wrap(a.θ + r.θ) )
+```
+
+The pose of `b` expressed in `a` is
+
+```text
+a⁻¹ ⊕ b = (  cos(a.θ)(b.x - a.x) + sin(a.θ)(b.y - a.y),
+            -sin(a.θ)(b.x - a.x) + cos(a.θ)(b.y - a.y),
+             wrap(b.θ - a.θ) )
+```
+
+These are `compose_pose` and `relative_pose` in `atlas.geometry`. They satisfy
+`a ⊕ (a⁻¹ ⊕ b) = b`, and the pose-graph tests check that round trip.
+
+### 20.3 Graph model
+
+Nodes are poses `x₀ … xₙ₋₁`; edges are relative measurements `zᵢⱼ` with a
+weight `wᵢⱼ`. Consecutive nodes get odometry edges whose measurement is the
+relative odometry increment; verified loop closures add edges between the
+current node and an older one.
+
+For an edge, the predicted relative pose is
+
+```text
+ẑᵢⱼ = xᵢ⁻¹ ⊕ xⱼ
+```
+
+and the residual is the same transform expressed in the measurement frame:
+
+```text
+eᵢⱼ = zᵢⱼ⁻¹ ⊕ ẑᵢⱼ = (eₓ, e_y, e_θ)
+```
+
+The graph cost is
+
+```text
+C = Σᵢⱼ wᵢⱼ (eₓ² + e_y² + e_θ²)
+```
+
+This treats translation and rotation residuals with the same scale. It is a
+deliberate simplification: no covariance weighting per edge, only a scalar loop
+weight.
+
+### 20.4 Gauss-Newton
+
+Stack the three coordinates of every node except the first. Node 0 is held fixed
+because a global rigid transform leaves the cost unchanged (gauge freedom).
+Linearising the residuals around the current poses gives the normal equations
+
+```text
+(H + λI) Δ = -b,    H = Σ Jᵀ W J,    b = Σ Jᵀ W e
+```
+
+with `W = wᵢⱼ I₃`. The step `Δ` is applied as `x ← x ⊕ Δ` per node, with the
+heading wrapped. `λ = 10⁻⁶` is a small Levenberg-style damping term that keeps
+the system solvable if the graph is temporarily disconnected or a node has no
+constraint.
+
+Jacobians are computed by central-free finite differences with `ε = 10⁻⁶` per
+coordinate. A graph in this project has ~100 nodes and ~110 edges, so a dense
+`3n × 3n` system (≈ 340 × 340) is small and the simpler code is preferable to
+hand-derived SE(2) Jacobians. The cost history records the value before the
+first step and after each iteration; the Phase 11 run drops from ~165 to ~0.006
+in a few iterations.
+
+### 20.5 Scan matching
+
+A loop measurement needs the robot's pose in the map frame. The matcher scores a
+candidate pose by projecting the scan's hit points through that pose and looking
+up the distance field:
+
+```text
+score(p) = mean over sampled beams of clip(d(p, nearest obstacle), 0, d_max)
+```
+
+Lower is better. The search is a grid over `(Δx, Δy, Δθ)` around a prior:
+coarse pass at `(0.20 m, 0.08 rad)` over `±0.60 m`, `±0.20 rad`, then a fine
+pass at one fifth of those steps. The search is deterministic and uses a fixed
+beam stride, so a seeded run repeats exactly. The prior is the particle-filter
+estimate, which is already close; the match then snaps the scan onto the map.
+
+Two properties matter:
+
+- the score is bounded by `d_max`, so a pose far from any obstacle surface
+  cannot look artificially good;
+- the field includes world boundaries, so a scan that leaves the map is
+  penalised.
+
+### 20.6 Loop detection and verification
+
+A closure is proposed only when the current estimate is within `r = 2.5 m` of an
+older node and at least `min_gap = 80` nodes (400 control steps, 20 s at 20 Hz)
+apart. The time gap matters: a nearby node from a few seconds ago carries no new
+information and its odometry is still locally consistent. With a smaller gap,
+the benchmark accumulated many short-range constraints whose small matching
+errors fought each other and made the result worse; 80 nodes keeps only the
+genuine return.
+
+Each candidate set is verified by one scan match. If the mean residual exceeds
+`0.25 m`, the closure is rejected. Otherwise the measurement is
+
+```text
+z = x_old⁻¹ ⊕ x_matched
+```
+
+for up to two candidate nodes, added with weight `w = 5` against the odometry
+weight `1`. The loop edge says "the current node is here relative to the old
+one, according to the map", and the optimiser distributes the disagreement over
+the intervening chain.
+
+### 20.7 Map rebuild
+
+After optimisation, the node scans are replayed into a fresh `LogOddsMap` at the
+corrected poses. This is the step that removes smearing: the same measurements,
+placed by better poses, produce sharper geometry. The quality metric compares
+the raw-pose map and the corrected-pose map on the intersection of their
+observed masks, so both are scored on cells that both runs saw:
+
+```text
+E = |surface(predicted) Δ surface(truth)|   restricted to the mask
+```
+
+### 20.8 Metrics
+
+```text
+nodes                  graph nodes (every 5th control step)
+loop_closures          accepted loop edges
+odometry_rms           node ATE of the raw odometry chain [m]
+odometry_max           largest node error before optimisation [m]
+slam_rms               node ATE after optimisation [m]
+slam_max               largest node error after optimisation [m]
+slam_final             error at the last node [m]
+ate_reduction          (odometry_rms - slam_rms) / odometry_rms
+graph_cost_before      cost after adding loop edges, before optimisation
+graph_cost_after       cost at the last iteration
+prior_map_error        prior surface error on the common mask [cells]
+raw_map_error          map built at odometry poses [cells]
+slam_map_error         map built at corrected poses [cells]
+map_error_reduction    raw_map_error - slam_map_error [cells]
+filter_rms             live particle-filter error during the run [m]
+```
+
+`ate_reduction` is the headline number: it isolates the back-end's effect on the
+same recorded run. `filter_rms` is reported separately because navigation still
+uses the filter, not the graph.
+
+### 20.9 Measured results
+
+Phase 11 benchmark, `loop` scenario, seeds 0-2 (`max_steps = 1200`, a 60 s
+budget per run; the runs finish in ~28.6 s):
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| reached / collisions | 1.0 / 0 | 0 / 0 |
+| loop closures | 10 | 0 |
+| nodes | 114.7 | 0.6 |
+| odometry RMS [m] | 1.00 | 0.01 |
+| SLAM RMS [m] | 0.10 | 0.01 |
+| SLAM max [m] | 0.15 | 0.02 |
+| ATE reduction | 89.7% | 1.4% |
+| graph cost before | 166.6 | 1.6 |
+| graph cost after | 0.0062 | 0.0003 |
+| raw map error [cells] | 174.7 | 5.0 |
+| SLAM map error [cells] | 134.7 | 2.1 |
+| map error reduction [cells] | 40.0 | 5.2 |
+| filter RMS [m] | 0.102 | 0.008 |
+
+The seed-0 demo run reports 0.990 m → 0.118 m, 88.0% ATE reduction and
+180 → 134 map cells. Deterministic fields repeat exactly for a seed; only
+wall-clock timings vary.
+
+### 20.10 Limitations
+
+1. **This is a back-end, not full SLAM.** The graph is built on odometry and
+   corrected offline from the recorded run; it does not update the live map or
+   the filter while driving. A production system would run the optimiser
+   incrementally and feed the correction back into control.
+2. **Loop edges are anchored to odometry poses.** The measurement is expressed
+   relative to an old node whose own drift remains. Early nodes are close to
+   truth, which is why the return-to-start closure works well; a closure between
+   two heavily drifted nodes inherits their error.
+3. **Prior-map dependence.** Verification and matching use the supplied prior.
+   A wrong prior (Phase 10) can bias the match, and an unknown world gives the
+   matcher nothing to lock onto.
+4. **No robust kernel.** A single bad loop edge is weighted like any other; a
+   Huber or switchable constraint would make the back-end tolerant of false
+   positives.
+5. **Isotropic weights.** Translation and rotation residuals are not scaled by
+   their uncertainty, and the loop weight is a fixed scalar.
+6. **Gap-tuned detection.** `min_gap = 80` nodes is chosen for this loop. A
+   general system needs a place-recognition or consistency test rather than a
+   fixed time gap.
+7. **Dense solver.** The normal equations are solved densely; graphs beyond a
+   few thousand nodes need sparsity.
+8. **One loop, one route.** The benchmark is a regression target, not a broad
+   SLAM evaluation.

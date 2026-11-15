@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 14 November 2026
-**Branch:** `main` (Phase 10 pushed; working tree clean)
-**Latest work:** Phase 10 — occupancy mapping and map repair
-**Tests:** 230 Phase 0-9 tests were passing; Phase 10 tests added, verification deferred
+**Date:** 15 November 2026
+**Branch:** `main` (Phase 11 complete; working tree clean)
+**Latest work:** Phase 11 — pose-graph SLAM and loop closure
+**Tests:** 243 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -23,6 +23,7 @@
 | 8 | Integrated autonomy | complete |
 | 9 | Kidnapped-robot relocalization | complete |
 | 10 | Occupancy mapping and map repair | implementation complete; verification pending |
+| 11 | Pose-graph SLAM and loop closure | complete |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -45,6 +46,14 @@ erase phantom obstacles, endpoint hits add missing ones, and the planner replans
 against the repaired map. The core roadmap, the optional relocalization
 extension and the mapping/map-repair extension are implemented; Phase 10
 performance numbers are still awaiting their first verification run.
+
+Phase 11 supplies the back-end Phase 10 named as missing. A run's wheel
+odometry, scans and filter estimates feed a pose graph: odometry ties consecutive
+nodes, a return to an old place is verified by scan matching and added as a loop
+closure, and Gauss-Newton spreads the correction over the chain. The occupancy
+map is rebuilt from the corrected poses. On the `loop` scenario the graph closes
+ten loops, cuts node-level trajectory error from `1.00 m` to `0.10 m` and lowers
+observed-surface map error from `175` to `135` cells, with zero collisions.
 
 ---
 
@@ -204,6 +213,49 @@ performance numbers are still awaiting their first verification run.
     `added_cells`, `removed_cells`, `goal_reached`, `failed`
 - `route_length(path)` — polyline length helper
 
+### Phase 11 — pose-graph SLAM (`src/atlas/slam/`)
+- `geometry.relative_pose(a, b)` and `geometry.compose_pose(a, rel)` —
+  SE(2) inverse composition and forward composition; round-trip tested.
+- `pose_graph.py`
+  - `GraphEdge(i, j, measurement, weight=1.0, kind="odometry")`
+  - `PoseGraph()`
+    - `add_node(pose) -> int`, `add_edge(i, j, measurement, weight,
+      kind) -> GraphEdge` with endpoint, distinctness, weight and finiteness
+      validation
+    - `residual(edge)`, `cost()`
+    - `optimize(iterations=20, damping=1e-6) -> list[float]` — Gauss-Newton on
+      every node except the fixed first one; dense `3n x 3n` normal equations;
+      finite-difference Jacobians; returns the cost before the first step and
+      after each iteration
+- `scan_matcher.py`
+  - `MatchResult(pose, score, evaluations)`
+  - `ScanMatcher(field, xy_window=1.25, theta_window=0.35, xy_step=0.25,
+    theta_step=0.10, max_beams=60, max_distance=1.0)`
+    - `score(scan, pose)` — mean clipped endpoint distance to the nearest mapped
+      obstacle
+    - `match(scan, prior) -> MatchResult` — coarse grid search then a fine pass
+      at one fifth of the step
+- `loop_closure.py`
+  - `LoopClosure(old, measurement, score)`
+  - `LoopCloser(matcher, radius=2.5, min_gap=20, max_score=0.25,
+    max_candidates=2)`
+    - `candidates(estimates, index)` — older nodes within the radius, closest
+      first
+    - `detect(scan, estimate, estimates, nodes, index)` — one verified match per
+      candidate set, rejects scores above `max_score`, returns
+      `relative_pose(old_node, matched_pose)` measurements
+- `slam.py`
+  - `LoopEvent(node, old, score)`
+  - `PoseGraphSlam(prior, node_stride=5, check_interval=5, loop_radius=2.5,
+    min_gap=80, max_score=0.25, max_candidates=2, max_loops=10,
+    loop_weight=5.0)`
+    - `observe(step, odometry, estimate, truth, scan)` — records every step and
+      adds a graph node every `node_stride` steps with an odometry edge
+    - `close_loops()`, `solve(iterations=20)` — detect, add loop edges, optimise,
+      store `cost_history`
+    - `map_from(poses) -> LogOddsMap` — replay node scans at the given poses
+    - `node_errors(poses)`, `corrected()`
+
 ### Phase 7 — evaluation (`src/atlas/evaluation/`)
 - `metrics.py`
   - `rms(values)`, `segment_projection(point, a, b)`,
@@ -211,7 +263,8 @@ performance numbers are still awaiting their first verification run.
   - `summarize(values) -> MetricSummary(count, mean, std, minimum, maximum)`
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
     `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
-    `IntegratedMetrics`, `RelocalizationMetrics`, `MappingMetrics`
+    `IntegratedMetrics`, `RelocalizationMetrics`, `MappingMetrics`,
+    `SlamMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
@@ -219,14 +272,16 @@ performance numbers are still awaiting their first verification run.
     inflation, dt, max_steps, controller, yaw_bias, inject_step, inject_rect,
     kidnap_step, kidnap_pose)` with validation
   - `demo_world()` returns a fresh 20 x 20 world per run; `slam_world()` and
-    `slam_prior_world()` supply the Phase 10 truth/prior pair
+    `slam_prior_world()` supply the Phase 10 truth/prior pair; `loop_world()`
+    is the Phase 11 16 x 16 map with a wall between start and goal
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
-  - nine scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
-    `localization`, `recovery`, `integrated`, `relocalization`, `slam`
+  - ten scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+    `localization`, `recovery`, `integrated`, `relocalization`, `slam`, `loop`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
-    `run_recovery`, `run_integrated`, `run_relocalization`, `run_mapping`
+    `run_recovery`, `run_integrated`, `run_relocalization`, `run_mapping`,
+    `run_slam`
   - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
     returns the trajectory, per-step odometry/filter/heading errors, detection
     counts, supervisor events and detected cells; the benchmark runner and the
@@ -239,6 +294,11 @@ performance numbers are still awaiting their first verification run.
     map, returns the trajectory, filter errors, map-error timeline, map events,
     prior/final/truth grids and added/removed cell sets; the benchmark runner
     and the Phase 10 demo both consume it
+  - `simulate_slam(...) -> SlamTrace` runs the Phase 10 navigation loop while
+    recording odometry, scans and estimates, then closes loops, optimises the
+    pose graph and rebuilds the map. Returns raw/corrected/truth nodes, accepted
+    loops, the optimiser cost history and prior/raw/slam/truth grids; the
+    benchmark runner and the Phase 11 demo both consume it
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -273,6 +333,11 @@ performance numbers are still awaiting their first verification run.
   invalidates the route, and plots the prior/final maps, added/removed cells,
   map error and localization error. Saves
   `experiments/plots/phase10_mapping.png`.
+- `scripts/phase11_demo.py` — drives the `loop` scenario, builds the pose graph
+  on odometry, verifies loop closures, optimises and rebuilds the map. Plots the
+  odometry vs corrected trajectory with closure links, the per-node ATE before
+  and after, the rebuilt map and the Gauss-Newton cost curve. Saves
+  `experiments/plots/phase11_loop_closure.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -290,7 +355,9 @@ performance numbers are still awaiting their first verification run.
   lost detection, coarse-to-fine search, out-of-bounds penalty,
   multi-hypothesis accumulation, recovery sequence and metrics), plus the
   Phase 10 log-odds mapping model, observed-surface error, map-version
-  replanning loop and filter/map coupling.
+  replanning loop and filter/map coupling, and the Phase 11 pose-graph model
+  (SE(2) composition, residual, Gauss-Newton, scan matching, loop verification,
+  map rebuild and SLAM metrics).
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -301,7 +368,11 @@ performance numbers are still awaiting their first verification run.
 - Phase 0-9 baseline: 230 tests pass. Phase 10 adds `test_mapping.py` and
   `test_slam_evaluation.py` and extends `test_evaluation.py`; that combined
   suite has not been executed yet because the authoring run deliberately
-  skipped all test/demo execution.
+  skipped all test/demo execution. Phase 11 adds 15 tests
+  (`test_pose_graph.py` 4, `test_scan_matcher.py` 3, `test_loop_closure.py` 4,
+  `test_slam_loop.py` 4) and those 15 pass; the combined suite is 243 test
+  functions, of which the Phase 11 additions and the touched
+  `test_evaluation.py` were run during authoring.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -373,6 +444,21 @@ performance numbers are still awaiting their first verification run.
   goal reached, zero collisions, at least one replan, non-zero added and
   removed cells, lower observed-surface map error than the prior, and filter
   position RMS below `0.5 m`. No measured Phase 10 values are claimed yet.
+- Phase 11 benchmark (`loop` scenario, seeds 0-2, 3 runs):
+  - goal reached in every run, zero collisions, `~28.6 s` duration
+  - `114.7 ± 0.6` graph nodes, `10` accepted loop closures in every run
+  - odometry node RMS `1.001 ± 0.010 m` → SLAM node RMS `0.103 ± 0.013 m`
+  - SLAM maximum node error `0.147 ± 0.023 m`, final node error
+    `0.076 ± 0.017 m`
+  - ATE reduction `89.7 ± 1.4%`
+  - graph cost `166.6 ± 1.6` → `0.0062 ± 0.0003`
+  - raw-pose map error `174.7 ± 5.0` cells → SLAM-pose map error
+    `134.7 ± 2.1` cells (`40.0 ± 5.2` fewer)
+  - live filter RMS `0.102 ± 0.008 m` (navigation is unchanged)
+  - seed-0 demo run: `0.990 m → 0.118 m` (88.0%), map `180 → 134` cells,
+    cost `164.81 → 0.0065`
+  - the 15 Phase 11 tests pass; `tests/test_evaluation.py` (24 collected cases)
+    passes with the added `slam_loop` kind and `loop` scenario
 
 ---
 
@@ -407,6 +493,7 @@ python scripts/phase6_demo.py
 python scripts/phase8_demo.py
 python scripts/phase9_demo.py
 python scripts/phase10_demo.py
+python scripts/phase11_demo.py
 python scripts/evaluate.py
 ```
 
@@ -444,16 +531,17 @@ Repository workflow used so far:
 7. **Replanning reacts only to newly observed cells.** Paths are replanned when
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
-8. **The evaluation suite is deliberately small.** One map, one route, eight
-   scenario kinds, nine scenarios and three seeds. It is a regression harness,
-   not a broad robotics benchmark; aggregation reports descriptive statistics
-   only.
+8. **The evaluation suite is deliberately small.** One map per scenario, one
+   route, nine scenario kinds, ten scenarios and three seeds. It is a
+   regression harness, not a broad robotics benchmark; aggregation reports
+   descriptive statistics only.
 9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
-   narrative experiments with plots and do not call `evaluation/`. Phase 8 is
-   the exception: `scripts/phase8_demo.py` and `run_integrated` both use
-   `simulate_integrated`, so the plotted and scored runs cannot drift. A change
-   to a shared component should still run both, because the older harness runs
-   will not catch a plotting or narrative regression.
+   narrative experiments with plots and do not call `evaluation/`. Phases 8-11
+   are the exceptions: `phase8_demo.py`, `phase9_demo.py`, `phase10_demo.py` and
+   `phase11_demo.py` share `simulate_*` with their benchmark runners, so the
+   plotted and scored runs cannot drift. A change to a shared component should
+   still run both, because the older harness runs will not catch a plotting or
+   narrative regression.
 10. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
     there is no beam width, intensity, multipath or mixed-pixel model.
 11. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
@@ -484,8 +572,9 @@ Repository workflow used so far:
     map, a free kidnap pose, a stationary in-place rotation, and fixed residual
     thresholds. It is stress-tested on several poses during development but the
     benchmark uses one kidnap pose; symmetry failures remain possible in a
-    repetitive map. Phase 10 adds mapping and map repair, but there is still no
-    loop closure or pose-graph SLAM, and no relocalization while driving.
+    repetitive map. Phase 10 adds mapping and map repair, and Phase 11 adds
+    offline loop closure, but there is still no relocalization while driving and
+    no live graph update.
 19. **Dynamic-map cells are discarded on recovery.** `resume()` clears the
     dynamic map because cells confirmed in the old pose frame are phantom
     obstacles in the new one. This is correct for a kidnap, but it also throws
@@ -495,10 +584,11 @@ Repository workflow used so far:
     `patience = 8` are tuned for the benchmark's 0.02 m range noise. A
     range-dependent threshold derived from particle spread would generalize
     better, at the cost of more machinery.
-21. **Phase 10 is map repair, not full SLAM.** There is no pose-graph loop
-    closure, no joint pose-map posterior and no revisit correction. The map is
-    built at the current filter estimate, so pose drift still smears geometry on
-    long routes.
+21. **Phase 10 is map repair, not full SLAM.** There is no joint pose-map
+    posterior and no revisit correction inside the Phase 10 loop. Phase 11 adds
+    an offline pose graph with loop closure, but the live mapper still builds at
+    the current filter estimate, so drift smears geometry until the back-end
+    runs.
 22. **Mapping needs a prior.** `LogOddsMap` repairs an occupancy grid supplied by
     the caller. It does not solve the "no map at all" problem and has no active
     exploration policy; coverage is whatever navigation happens to observe.
@@ -510,6 +600,34 @@ Repository workflow used so far:
     accuracy. Phase 10 has also not been measured yet: the implementation,
     tests and demo were committed under an explicit no-run policy, and the
     benchmark, demo and combined test suite still need their first execution.
+25. **Phase 11 is a back-end, not full SLAM.** The graph is built offline from a
+    recorded run; it does not update the live map or the filter while driving,
+    and the correction is never fed back into control. Incremental optimisation
+    and closed-loop SLAM are out of scope.
+26. **Loop edges are anchored to odometry poses.** A closure is expressed
+    relative to an old node whose own drift remains. Early nodes are close to
+    truth, which is why the return-to-start closure works well; a closure between
+    two heavily drifted nodes inherits their error.
+27. **Loop verification depends on the prior map.** Both the matcher and the
+    rejection threshold use the supplied prior. A wrong prior can bias the match
+    (Phase 10 tests repair separately) and an unknown world gives the matcher
+    nothing to lock onto.
+28. **The loop detector is proximity plus a fixed time gap.** `min_gap = 80`
+    nodes (400 steps, 20 s at 20 Hz) is tuned for this loop; a smaller gap
+    produced short-range constraints that made node RMS worse in sweeps. A
+    general system needs place recognition or pairwise consistency, not a fixed
+    gap.
+29. **No robust kernel.** A false-positive loop edge is weighted exactly like a
+    correct one. Huber or switchable constraints would make the back-end
+    tolerant of bad closures.
+30. **Weights are isotropic.** Translation and rotation residuals share one
+    scale and loop edges use a fixed weight of 5 against odometry's 1; there is
+    no per-edge covariance.
+31. **The solver is dense.** Normal equations are solved densely, which is fine
+    for ~100 nodes but needs sparsity beyond a few thousand.
+32. **One loop, one route.** The `loop` benchmark is a regression target, not a
+    broad SLAM evaluation; symmetric worlds, multiple loops and moving objects
+    are untested. Phase 11 itself was measured (unlike Phase 10).
 
 ---
 
@@ -1005,10 +1123,81 @@ unchanged, then record the measured Phase 10 numbers in section 3 and in
 
 ---
 
-## 15. Working agreement
+## 15. Phase 11 — Pose-graph SLAM and loop closure (completed)
+
+**Outcome:** the back-end Phase 10 named as missing now exists. A run's wheel
+odometry, scans and particle-filter estimates feed a pose graph: odometry ties
+consecutive nodes, a return to an old place is verified by scan matching against
+the prior map and added as a loop closure, and Gauss-Newton spreads the
+correction over the chain. The occupancy map is rebuilt from the corrected
+poses. On the `loop` scenario the graph closes ten loops, cuts node-level
+trajectory error from `1.00 m` to `0.10 m` (89.7%), and lowers observed-surface
+map error from `175` to `135` cells, with zero collisions. Navigation itself is
+unchanged: the filter still drives the mapping navigator.
+
+### Goal
+Correct accumulated pose drift when the robot revisits a place, and rebuild the
+map from the corrected trajectory, without changing the live control loop.
+
+### Implemented scope
+1. `geometry.relative_pose` / `compose_pose` — SE(2) inverse and forward
+   composition, round-trip tested.
+2. `src/atlas/slam/pose_graph.py` — `GraphEdge`, `PoseGraph` with validated
+   node/edge insertion, residuals, cost and a damped Gauss-Newton optimiser with
+   finite-difference Jacobians and a fixed first node.
+3. `src/atlas/slam/scan_matcher.py` — distance-field correlative matcher with
+   coarse and fine passes and a bounded mean endpoint score.
+4. `src/atlas/slam/loop_closure.py` — proximity candidates with a minimum time
+   gap, one verified scan match per candidate set, relative-pose measurement and
+   a residual rejection threshold.
+5. `src/atlas/slam/slam.py` — `LoopEvent`, `PoseGraphSlam` (step recording, node
+   creation, loop detection, optimisation, map replay and node errors).
+6. `SlamMetrics`, `SlamTrace`, `simulate_slam`, `run_slam`, dispatcher kind
+   `slam_loop` and package exports.
+7. `loop_world()`, the `loop` scenario (16 x 16, wall between start and goal,
+   correct prior) and `KINDS` / registry updates.
+8. `tests/test_pose_graph.py`, `test_scan_matcher.py`, `test_loop_closure.py`,
+   `test_slam_loop.py` (15 tests) and `tests/test_evaluation.py` updates.
+9. `scripts/phase11_demo.py` — odometry vs corrected trajectory with closure
+   links, per-node ATE, rebuilt map and optimiser cost curve.
+10. Docs: `docs/mathematics.md` section 20 and the Phase 11 section of
+    `docs/design_decisions.md`.
+
+### Acceptance (met)
+- Goal reached with zero collisions in every seed.
+- The odometry and corrected maps are compared on a common observed mask, so
+  both are scored on the same cells.
+- At least one loop closure per run (ten observed in every seed).
+- SLAM node RMS is below `0.5 x` odometry node RMS (`0.103` vs `1.001`).
+- ATE reduction above `50%` (`89.7%`).
+- Graph cost falls after optimisation (`166.6 -> 0.0062`).
+- SLAM map error below the raw-pose map error (`134.7` vs `174.7` cells).
+- The 15 Phase 11 tests and the touched `test_evaluation.py` pass. The Phase 10
+  tests, benchmark and demo remain unexecuted by design.
+
+### Deliberate simplifications
+- The back-end is offline and does not feed corrections back into control.
+- Nodes are odometry poses; loop measurements are relative to an old node whose
+  drift remains.
+- Loop verification and matching use the supplied prior map.
+- Detection is proximity plus a fixed `min_gap = 80` nodes, not place
+  recognition.
+- No robust kernel and no per-edge covariance; loop edges use weight 5 against
+  odometry's 1.
+- The dense normal equations target graphs of a few hundred nodes.
+- Node scans (every fifth step) are replayed for the map rebuild, not every
+  scan.
+- One loop and one route are benchmarked.
+
+---
+
+## 16. Working agreement
 
 Keep the existing conventions and do not change Phase 0-9 behaviour; the
 230-test Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top
-of that baseline, but the combined suite has not been executed yet. Commit
-implementation first, docs and demo second. Push only when the user explicitly
-asks, and never present unverified Phase 10 numbers as measured results.
+of that baseline, but the combined suite has not been executed yet. Phase 11
+adds 15 tests (243 test functions total); those 15 and the touched
+`test_evaluation.py` were run during authoring, the rest of the combined suite
+was not. Commit implementation first, docs and demo second. Push only when the
+user explicitly asks, and never present unverified Phase 10 numbers as measured
+results.
