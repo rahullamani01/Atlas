@@ -16,6 +16,7 @@ from atlas.evaluation.metrics import (
     NavigationMetrics,
     PlanningMetrics,
     RelocalizationMetrics,
+    SlamMetrics,
     TrackingMetrics,
     path_errors,
     rms,
@@ -32,6 +33,7 @@ from atlas.robot.odometry import Odometry
 from atlas.sensors import Lidar
 from atlas.simulation.simulator import Simulator
 from atlas.simulation.world import RectObstacle
+from atlas.slam import LoopEvent, PoseGraphSlam
 
 WHEEL_SCALE_LEFT = 0.99
 WHEEL_SCALE_RIGHT = 1.01
@@ -46,6 +48,7 @@ RELOCALIZE_SPEED = 0.6
 RESIDUAL_LIMIT = 0.5
 RESIDUAL_PATIENCE = 8
 RECOVERY_TOLERANCE = 0.5
+SLAM_SPEED = 0.4
 
 
 @dataclass(frozen=True)
@@ -97,6 +100,24 @@ class MappingTrace:
     truth_grid: OccupancyGrid
     added_cells: set[tuple[int, int]]
     removed_cells: set[tuple[int, int]]
+
+
+@dataclass(frozen=True)
+class SlamTrace:
+    """Detailed record of one pose-graph SLAM run."""
+
+    metrics: SlamMetrics
+    trajectory: list[tuple[float, float, float]]
+    filter_errors: list[float]
+    node_raw: list[Pose]
+    node_corrected: list[Pose]
+    node_truth: list[Pose]
+    loops: list[LoopEvent]
+    cost_history: list[float]
+    prior_grid: OccupancyGrid
+    raw_grid: OccupancyGrid
+    slam_grid: OccupancyGrid
+    truth_grid: OccupancyGrid
 
 
 def _plan(scenario: Scenario):
@@ -896,6 +917,199 @@ def run_mapping(
     return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
 
 
+def simulate_slam(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> SlamTrace:
+    """Navigate, then correct the run with pose-graph loop closure.
+
+    Navigation is the Phase 10 loop: particle-filter estimate, mapping
+    navigator, mapping at the estimate. The back-end records wheel odometry,
+    scans and estimates, builds a graph on the odometry chain, verifies loop
+    closures against the prior map, optimises, and rebuilds the map from the
+    corrected poses. Ground truth is read only to score the result.
+    """
+    truth_world = scenario.world()
+    truth_raw = OccupancyGrid.from_world(
+        truth_world, resolution=scenario.resolution
+    )
+    prior_world = (
+        scenario.prior_world() if scenario.prior_world is not None
+        else scenario.world()
+    )
+    prior_raw = OccupancyGrid.from_world(
+        prior_world, resolution=scenario.resolution
+    )
+
+    mapping = LogOddsMap(
+        prior_raw,
+        max_range=LIDAR_RANGE,
+        max_beams=max(beams, 90),
+    )
+    planning = mapping.to_grid(scenario.inflation)
+    start_cell = nearest_free_cell(
+        planning, planning.world_to_cell(*scenario.start)
+    )
+    goal_cell = planning.world_to_cell(*scenario.goal)
+    if start_cell is None or not planning.is_free(goal_cell):
+        raise RuntimeError("slam scenario needs a free start and goal")
+    initial = a_star(planning, start_cell, goal_cell)
+    if not initial.found:
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+    initial_path = [planning.cell_to_world(cell) for cell in initial.path]
+
+    robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
+    sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        planning,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+    navigator = MappingNavigator(
+        mapping,
+        goal_cell,
+        inflation=scenario.inflation,
+        follower=PathFollower(max_linear_speed=SLAM_SPEED),
+    )
+    if not navigator.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+
+    slam = PoseGraphSlam(prior_raw, min_gap=80, max_loops=20)
+
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    executed = 0
+    last_version = -1
+
+    for step in range(scenario.max_steps):
+        estimate = pf.estimate()
+        scan = lidar.scan(truth_world, robot.pose)
+        command = navigator.step(estimate, scan, scenario.dt)
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(
+            command.v, command.w
+        )
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+        pf.update(scan)
+
+        if navigator.map_version != last_version:
+            pf.replace_grid(navigator.planning_grid())
+            last_version = navigator.map_version
+
+        slam.observe(step, odometry.pose, estimate, robot.pose, scan)
+
+        estimate = pf.estimate()
+        filter_errors.append(math.hypot(
+            estimate.x - robot.pose.x,
+            estimate.y - robot.pose.y,
+        ))
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        )))
+
+        if not ok or navigator.goal_reached or navigator.failed:
+            break
+
+    raw_nodes = slam.corrected()
+    raw_errors = slam.node_errors(raw_nodes)
+    slam.solve()
+    corrected = slam.corrected()
+    slam_errors = slam.node_errors(corrected)
+
+    raw_map = slam.map_from(raw_nodes)
+    slam_map = slam.map_from(corrected)
+    observed = raw_map.observed & slam_map.observed
+    prior_error = map_error(
+        prior_raw.blocked, truth_raw.blocked, observed
+    )
+    raw_error = map_error(
+        raw_map.occupancy, truth_raw.blocked, observed
+    )
+    slam_error = map_error(
+        slam_map.occupancy, truth_raw.blocked, observed
+    )
+
+    odometry_rms = rms(raw_errors)
+    slam_rms = rms(slam_errors)
+    reduction_ratio = (
+        (odometry_rms - slam_rms) / odometry_rms
+        if odometry_rms > 0 else 0.0
+    )
+    history = slam.cost_history or [0.0]
+    goal_world = planning.cell_to_world(goal_cell)
+
+    metrics = SlamMetrics(
+        reached=navigator.goal_reached,
+        failed=navigator.failed or sim.collision_count > 0,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        final_error=math.hypot(
+            robot.pose.x - goal_world[0],
+            robot.pose.y - goal_world[1],
+        ),
+        nodes=len(corrected),
+        loop_closures=len(slam.loops),
+        odometry_rms=odometry_rms,
+        odometry_max=max(raw_errors),
+        slam_rms=slam_rms,
+        slam_max=max(slam_errors),
+        slam_final=slam_errors[-1],
+        ate_reduction=reduction_ratio,
+        graph_cost_before=history[0],
+        graph_cost_after=history[-1],
+        prior_map_error=prior_error,
+        raw_map_error=raw_error,
+        slam_map_error=slam_error,
+        map_error_reduction=raw_error - slam_error,
+        filter_rms=rms(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return SlamTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        filter_errors=filter_errors,
+        node_raw=raw_nodes,
+        node_corrected=corrected,
+        node_truth=slam.node_truth,
+        loops=list(slam.loops),
+        cost_history=list(history),
+        prior_grid=prior_raw,
+        raw_grid=raw_map.to_grid(0.0),
+        slam_grid=slam_map.to_grid(0.0),
+        truth_grid=truth_raw,
+    )
+
+
+def run_slam(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> ScenarioResult:
+    """Evaluate pose-graph loop closure over a navigation run."""
+    trace = simulate_slam(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -914,6 +1128,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_relocalization(scenario, seed=seed)
     if scenario.kind == "slam":
         return run_mapping(scenario, seed=seed)
+    if scenario.kind == "slam_loop":
+        return run_slam(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 

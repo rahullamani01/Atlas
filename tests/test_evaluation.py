@@ -28,11 +28,13 @@ def test_default_suite_covers_every_stage():
         "integrated",
         "relocalization",
         "slam",
+        "slam_loop",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",
         "tracking_p",
         "slam",
+        "loop",
     }
 
 

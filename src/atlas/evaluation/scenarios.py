@@ -20,6 +20,7 @@ KINDS = (
     "integrated",
     "relocalization",
     "slam",
+    "slam_loop",
 )
 CONTROLLERS = ("p", "pid")
 
@@ -53,12 +54,19 @@ def slam_prior_world() -> World:
     ])
 
 
+def loop_world() -> World:
+    """Phase 11 map: wall between start and goal, route loops around it."""
+    return World(16, 16, [
+        RectObstacle(7.8, 5.0, 8.2, 14.0),
+    ])
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One reproducible experiment configuration.
 
     ``kind`` selects the runner: kinematics, planning, tracking, localization,
-    recovery, integrated, relocalization or slam. ``controller`` and
+    recovery, integrated, relocalization, slam or slam_loop. ``controller`` and
     ``yaw_bias`` only affect tracking runs. ``inject_step`` / ``inject_rect``
     add a new obstacle after the given control step, which is how the recovery
     scenario changes the world mid-run. ``kidnap_step`` / ``kidnap_pose``
@@ -179,6 +187,16 @@ SCENARIOS: dict[str, Scenario] = {
         world=slam_world,
         prior_world=slam_prior_world,
         inflation=0.30,
+    ),
+    "loop": Scenario(
+        name="loop",
+        kind="slam_loop",
+        world=loop_world,
+        prior_world=loop_world,
+        start=(7.0, 9.5),
+        goal=(9.0, 9.5),
+        inflation=0.30,
+        max_steps=1200,
     ),
 }
 

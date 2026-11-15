@@ -40,6 +40,35 @@ def rotation_matrix(theta: float) -> np.ndarray:
     return np.array([[c, -s], [s, c]])
 
 
+def relative_pose(a, b) -> tuple[float, float, float]:
+    """Pose of frame ``b`` expressed in frame ``a``.
+
+    ``a`` and ``b`` are ``(x, y, theta)`` poses; the result is the rigid
+    transform that takes a point from ``b`` into ``a``.
+    """
+    ax, ay, atheta = a
+    bx, by, btheta = b
+    dx, dy = bx - ax, by - ay
+    c, s = math.cos(atheta), math.sin(atheta)
+    return (
+        c * dx + s * dy,
+        -s * dx + c * dy,
+        wrap_angle(btheta - atheta),
+    )
+
+
+def compose_pose(a, rel) -> tuple[float, float, float]:
+    """Apply the relative pose ``rel`` to frame ``a``."""
+    ax, ay, atheta = a
+    rx, ry, rtheta = rel
+    c, s = math.cos(atheta), math.sin(atheta)
+    return (
+        ax + c * rx - s * ry,
+        ay + s * rx + c * ry,
+        wrap_angle(atheta + rtheta),
+    )
+
+
 def robot_to_world(point_robot, pose) -> np.ndarray:
     """Convert a point in the robot frame to world coordinates.
 

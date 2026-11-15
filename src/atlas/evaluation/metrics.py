@@ -305,6 +305,56 @@ class MappingMetrics:
 
 
 @dataclass(frozen=True)
+class SlamMetrics:
+    reached: bool
+    failed: bool
+    collisions: int
+    duration: float
+    final_error: float
+    nodes: int
+    loop_closures: int
+    odometry_rms: float
+    odometry_max: float
+    slam_rms: float
+    slam_max: float
+    slam_final: float
+    ate_reduction: float
+    graph_cost_before: float
+    graph_cost_after: float
+    prior_map_error: int
+    raw_map_error: int
+    slam_map_error: int
+    map_error_reduction: int
+    filter_rms: float
+    filter_heading_rms_deg: float
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "reached": 1.0 if self.reached else 0.0,
+            "failed": 1.0 if self.failed else 0.0,
+            "collisions": self.collisions,
+            "duration": self.duration,
+            "final_error": self.final_error,
+            "nodes": self.nodes,
+            "loop_closures": self.loop_closures,
+            "odometry_rms": self.odometry_rms,
+            "odometry_max": self.odometry_max,
+            "slam_rms": self.slam_rms,
+            "slam_max": self.slam_max,
+            "slam_final": self.slam_final,
+            "ate_reduction": self.ate_reduction,
+            "graph_cost_before": self.graph_cost_before,
+            "graph_cost_after": self.graph_cost_after,
+            "prior_map_error": self.prior_map_error,
+            "raw_map_error": self.raw_map_error,
+            "slam_map_error": self.slam_map_error,
+            "map_error_reduction": self.map_error_reduction,
+            "filter_rms": self.filter_rms,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+        }
+
+
+@dataclass(frozen=True)
 class IntegratedMetrics:
     reached: bool
     failed: bool
