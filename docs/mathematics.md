@@ -1946,7 +1946,8 @@ wall-clock timings vary.
 1. **This is a back-end, not full SLAM.** The graph is built on odometry and
    corrected offline from the recorded run; it does not update the live map or
    the filter while driving. A production system would run the optimiser
-   incrementally and feed the correction back into control.
+   incrementally and feed the correction back into control. Phase 12 does
+   exactly that for the first verified closure; see §21.
 2. **Loop edges are anchored to odometry poses.** The measurement is expressed
    relative to an old node whose own drift remains. Early nodes are close to
    truth, which is why the return-to-start closure works well; a closure between
@@ -1966,3 +1967,181 @@ wall-clock timings vary.
    few thousand nodes need sparsity.
 8. **One loop, one route.** The benchmark is a regression target, not a broad
    SLAM evaluation.
+
+## 21. Online pose-graph correction (Phase 12)
+
+### 21.1 Why correct during the run
+
+Phase 11 optimises after the robot has stopped, so the drive that produced the
+drift is already over. The live occupancy map and the particle filter never see
+the correction: the graph is a log of what happened, not a repair of what the
+robot is using. If the robot is to keep working after a revisit, the correction
+has to become an event inside the control loop.
+
+Phase 12 does that for the first verified loop closure. Everything before the
+closure is unchanged — LiDAR, the particle filter, the mapping navigator and the
+pose graph are the same components as Phase 10 and 11. What changes is that the
+back-end's answer is pushed back into the live system, and driving continues.
+
+### 21.2 The correction event
+
+Loop detection is incremental. `PoseGraphSlam` remembers the highest node index
+it has examined (`_checked_until`), so `close_loops()` only tests nodes added
+since the previous call. The online runner calls it every `check_interval = 5`
+control steps once the graph is longer than `min_gap = 80` nodes. A check
+therefore costs only the handful of new candidates, not a rescan of the whole
+history. When a call adds at least one loop edge, that is the correction event:
+
+```text
+1. snapshot the raw nodes x^before, their map, RMS and graph cost
+2. optimise the graph with solve(detect=False)   # detection already done
+3. read the corrected nodes x^after and the new RMS
+4. rebuild the occupancy map from the corrected node poses
+5. replace the navigator's map and invalidate its cached planning grid
+6. reset wheel odometry to the corrected last node
+7. reseed the particle filter at that node on the new map
+8. replan to the current target and continue
+```
+
+Step 2 passes `detect=False` so the optimiser does not repeat the loop search;
+the detection call in step 1 already covered every node up to the current one.
+The correction magnitude reported by the run is the largest node displacement
+
+```text
+Δ = max_i ‖ x_i^after - x_i^before ‖₂
+```
+
+over the nodes that existed at the closure. Node 0 is held fixed, so the maximum
+lands on the newest part of the chain. In the measured run `Δ = 1.17 m`.
+
+Only the first closure triggers a correction. The event is discrete and
+expensive (a graph solve plus a full map rebuild); repeating it on every check
+would churn the filter and the map. Later closures still add edges to the graph
+for scoring, but they are not fed back into control. This is a deliberate
+one-shot design, listed under limitations.
+
+### 21.3 Why odometry and the filter are reset
+
+Graph nodes are wheel-odometry poses. After optimisation the graph lives in a
+corrected frame while the running odometry is still in the raw frame. If
+odometry were left alone, the next increment would compose from the drifted pose
+and resurrect the offset the closure just removed. Resetting odometry to the
+corrected last node makes every subsequent increment relative to the corrected
+frame, so the repair persists for the rest of the drive.
+
+The filter is reset for the same reason plus one more: its measurement grid was
+built from the pre-correction map. Keeping the old estimate would make the first
+scan update pull the filter back toward the drifted pose, and keeping the old
+grid would interpret the corrected map in the wrong frame. The filter is
+reseeding at the corrected node with `σ = 0.05 m` and `σ_θ = 0.02 rad`. That is
+not cheating: the corrected pose comes from a map-verified loop closure, not
+from ground truth, which the runner reads only for scoring.
+
+### 21.4 Rebuild, do not warp
+
+A log-odds grid is not a set of Cartesian points, so transforming it would
+resample and thicken the evidence. The corrected map is instead replayed from
+the stored node scans at the corrected poses — the same operation as Phase 11's
+offline rebuild. The cost is one map build over the nodes present at the
+closure, paid once. Cells whose evidence came from scans between two nodes stay
+in the old frame until a later scan re-observes them; node scans are every fifth
+control step (0.25 s).
+
+### 21.5 Continuing after the correction
+
+`Scenario` gains `goal_sequence`, a tuple of goals visited after `goal`. The
+`online` scenario targets `(9.0, 9.5)`, then `(10.0, 9.5)`. When the navigator
+reports arrival, the runner calls `MappingNavigator.retarget()` and plans again
+from the current estimate. This is what makes the phase different from a
+one-off correction: the second leg is driven entirely on the corrected map and
+the reset odometry, so the robot has to keep localising, planning and avoiding
+obstacles after its world moved. In the measured run the second leg is ~65 extra
+nodes and the robot finishes within `0.014 m` of the second goal.
+
+### 21.6 Metrics
+
+```text
+closure_step           control step at which the correction fired
+closure_time           closure_step * dt [s]
+correction             max node displacement from the optimisation [m]
+pre_closure_rms        node ATE before optimisation, at the closure [m]
+post_closure_rms       node ATE after optimisation, same nodes [m]
+ate_reduction          (pre - post) / pre
+slam_rms               node ATE over the whole run after correction [m]
+slam_final             error at the last node of the run [m]
+graph_cost_before      cost after adding the loop edges
+graph_cost_after       cost at the last Gauss-Newton iteration
+raw_map_error          map from the raw nodes at the closure [cells]
+slam_map_error         map from the corrected nodes at the closure [cells]
+map_error_reduction    raw_map_error - slam_map_error [cells]
+filter_rms             live particle-filter position error [m]
+filter_heading_rms_deg live particle-filter heading error [deg]
+```
+
+`pre_closure_rms` and `post_closure_rms` are measured on the same node set, so
+they isolate the optimiser's effect. `slam_rms` and `slam_final` include the
+nodes recorded after the correction, when the robot is driving on the repaired
+map. That is why `slam_final` can be larger than `slam_rms`: it is one sample at
+the end of the second leg, not the average over the run.
+
+The map comparison uses maps built from the node set that existed at the
+closure, not from the final graph. After correction the robot keeps adding nodes
+and seeing new cells; comparing final maps would mix the correction's effect
+with the extra travel. Building both maps from the same pre-correction nodes and
+scoring them on the intersection of their observed masks keeps the comparison
+like-for-like, exactly as in §20.7.
+
+### 21.7 Measured results
+
+Phase 12 benchmark, `online` scenario, seeds 0-2 (default 800 particles,
+60 beams; each run finishes in ~32.3 s):
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| reached / collisions | 1.0 / 0 | 0 / 0 |
+| final error [m] | 0.014 | 0.006 |
+| nodes | 129.7 | 0.6 |
+| loop closures | 2 | 0 |
+| closure step / time | 450 / 22.5 s | 0 / 0 |
+| correction [m] | 1.170 | 0.005 |
+| pre-closure RMS [m] | 0.687 | 0.002 |
+| post-closure RMS [m] | 0.103 | 0.001 |
+| ATE reduction | 85.0% | 0.2% |
+| SLAM RMS [m] | 0.099 | 0.0005 |
+| SLAM final [m] | 0.161 | 0.006 |
+| graph cost before / after | 17.24 / 0.00459 | 0.11 / 0.00001 |
+| raw map error [cells] | 170.3 | 5.9 |
+| corrected map error [cells] | 125.3 | 3.1 |
+| map error reduction [cells] | 45.0 | 8.7 |
+| filter RMS [m] | 0.105 | 0.008 |
+| filter heading RMS [deg] | 1.13 | 0.01 |
+
+The seed-0 demo reports the same closure at step 450: `0.689 m -> 0.103 m`
+(85.1%), graph cost `17.13 -> 0.0046`, map `177 -> 122` cells, and a `0.012 m`
+final error. Deterministic fields repeat exactly for a seed; only wall-clock
+timings vary.
+
+The headline is not the 85% figure by itself — Phase 11 already showed that
+offline. It is that the same correction is applied mid-run and the robot then
+completes a second goal with zero collisions, `0.105 m` filter RMS and no
+re-accumulation of the pre-closure error.
+
+### 21.8 Limitations
+
+1. **One correction, not continuous SLAM.** Only the first verified closure is
+   fed back. Later closures add graph edges but do not update the live map or
+   filter. A production system would correct repeatedly and re-optimise all
+   constraints each time.
+2. **No rollback on a bad closure.** A false positive would replace the live map
+   with a wrong one and reseed the filter there. Phase 11's score threshold is
+   the only defence; there is no multi-closure consistency test.
+3. **Node scans, not all scans.** The live map is rebuilt from node scans (every
+   fifth step). Evidence gathered between nodes is only corrected as it is
+   re-observed.
+4. **Filter reset is a reseed.** Position and heading uncertainty are reset to
+   fixed small values; the filter's velocity state and history are not reused.
+5. **Still a tuned scenario.** One 16 x 16 world, one loop, a correct prior and
+   a fixed 2% wheel-scale mismatch. The `min_gap = 80` rule and the one-shot
+   trigger are tuned to this route.
+6. **Map error is an observed-surface indicator.** As in Phase 10, the metric
+   scores obstacle surfaces seen by the run, not global map accuracy.

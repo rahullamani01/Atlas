@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 15 November 2026
-**Branch:** `main` (Phase 11 complete; working tree clean)
-**Latest work:** Phase 11 — pose-graph SLAM and loop closure
-**Tests:** 243 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
+**Date:** 16 November 2026
+**Branch:** `main` (Phase 12 complete; working tree clean)
+**Latest work:** Phase 12 — online pose-graph correction during navigation
+**Tests:** 247 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -24,6 +24,7 @@
 | 9 | Kidnapped-robot relocalization | complete |
 | 10 | Occupancy mapping and map repair | implementation complete; verification pending |
 | 11 | Pose-graph SLAM and loop closure | complete |
+| 12 | Online pose-graph correction during navigation | complete |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -54,6 +55,14 @@ closure, and Gauss-Newton spreads the correction over the chain. The occupancy
 map is rebuilt from the corrected poses. On the `loop` scenario the graph closes
 ten loops, cuts node-level trajectory error from `1.00 m` to `0.10 m` and lowers
 observed-surface map error from `175` to `135` cells, with zero collisions.
+
+Phase 12 makes that correction happen while the robot drives. The first verified
+closure optimises the graph in place, rebuilds the live map, resets wheel
+odometry and reseeds the particle filter at the corrected node, then the
+navigator replans and continues to a second goal. On the `online` scenario the
+correction fires at `22.5 s`, moves the chain by `1.17 m`, cuts node error from
+`0.69 m` to `0.10 m` (85%), and the robot finishes `0.014 m` from the second goal
+with zero collisions on the repaired map.
 
 ---
 
@@ -251,10 +260,28 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
     loop_weight=5.0)`
     - `observe(step, odometry, estimate, truth, scan)` — records every step and
       adds a graph node every `node_stride` steps with an odometry edge
-    - `close_loops()`, `solve(iterations=20)` — detect, add loop edges, optimise,
+    - `close_loops()` — incremental: only nodes added since the previous call are
+      examined, so it can be called from a live loop
+    - `solve(iterations=20, detect=True)` — optionally detect, then optimise and
       store `cost_history`
     - `map_from(poses) -> LogOddsMap` — replay node scans at the given poses
     - `node_errors(poses)`, `corrected()`
+
+### Phase 12 — online correction (`src/atlas/`)
+- `MappingNavigator.replace_map(occupancy_map)` — swap in a rebuilt map, bump
+  `map_version` and invalidate the cached planning grid.
+- `MappingNavigator.retarget(goal_cell)` — clear the old path, reset the follower
+  and set the new goal without planning; the caller plans next.
+- `PoseGraphSlam.close_loops()` now remembers `_checked_until`, so repeated calls
+  during a drive only inspect new nodes.
+- `OnlineSlamMetrics` — closure step/time, correction magnitude, pre/post ATE,
+  graph costs, map errors on the closure node set, SLAM and filter errors.
+- `OnlineSlamTrace` — trajectory, per-step filter errors, pre/post/truth nodes,
+  loops, cost history, closure step and prior/raw/closure/final/truth grids.
+- `simulate_online_slam(...) -> OnlineSlamTrace` — drives `goal`, corrects at the
+  first verified closure, then drives `goal_sequence` on the repaired map.
+- `run_online_slam(...) -> ScenarioResult` — benchmark wrapper and dispatcher
+  entry for kind `slam_online`.
 
 ### Phase 7 — evaluation (`src/atlas/evaluation/`)
 - `metrics.py`
@@ -264,24 +291,25 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
     `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
     `IntegratedMetrics`, `RelocalizationMetrics`, `MappingMetrics`,
-    `SlamMetrics`
+    `SlamMetrics`, `OnlineSlamMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
-  - `Scenario(name, kind, world, prior_world, start, goal, resolution,
-    inflation, dt, max_steps, controller, yaw_bias, inject_step, inject_rect,
-    kidnap_step, kidnap_pose)` with validation
+  - `Scenario(name, kind, world, prior_world, start, goal, goal_sequence,
+    resolution, inflation, dt, max_steps, controller, yaw_bias, inject_step,
+    inject_rect, kidnap_step, kidnap_pose)` with validation
   - `demo_world()` returns a fresh 20 x 20 world per run; `slam_world()` and
     `slam_prior_world()` supply the Phase 10 truth/prior pair; `loop_world()`
     is the Phase 11 16 x 16 map with a wall between start and goal
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
-  - ten scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
-    `localization`, `recovery`, `integrated`, `relocalization`, `slam`, `loop`
+  - eleven scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+    `localization`, `recovery`, `integrated`, `relocalization`, `slam`, `loop`,
+    `online`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
     `run_recovery`, `run_integrated`, `run_relocalization`, `run_mapping`,
-    `run_slam`
+    `run_slam`, `run_online_slam`
   - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
     returns the trajectory, per-step odometry/filter/heading errors, detection
     counts, supervisor events and detected cells; the benchmark runner and the
@@ -299,6 +327,12 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
     pose graph and rebuilds the map. Returns raw/corrected/truth nodes, accepted
     loops, the optimiser cost history and prior/raw/slam/truth grids; the
     benchmark runner and the Phase 11 demo both consume it
+  - `simulate_online_slam(...) -> OnlineSlamTrace` runs the same loop but checks
+    for closures during the drive. The first verified closure optimises the
+    graph, rebuilds the map, resets odometry and reseeds the filter at the
+    corrected node; the run then continues through `goal_sequence`. Returns the
+    pre/post node sets, closure step, cost history and the raw/closure/final
+    grids for comparison
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -338,6 +372,11 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
   odometry vs corrected trajectory with closure links, the per-node ATE before
   and after, the rebuilt map and the Gauss-Newton cost curve. Saves
   `experiments/plots/phase11_loop_closure.png`.
+- `scripts/phase12_demo.py` — drives the `online` scenario and corrects at the
+  first verified closure, then continues to the second goal. Plots the driven
+  route with odometry vs corrected nodes and the correction arrow, per-node error
+  before/after, node displacement, the raw vs corrected map and the optimiser
+  cost curve. Saves `experiments/plots/phase12_online_slam.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -355,9 +394,11 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
   lost detection, coarse-to-fine search, out-of-bounds penalty,
   multi-hypothesis accumulation, recovery sequence and metrics), plus the
   Phase 10 log-odds mapping model, observed-surface error, map-version
-  replanning loop and filter/map coupling, and the Phase 11 pose-graph model
+  replanning loop and filter/map coupling, the Phase 11 pose-graph model
   (SE(2) composition, residual, Gauss-Newton, scan matching, loop verification,
-  map rebuild and SLAM metrics).
+  map rebuild and SLAM metrics), and the Phase 12 online correction loop
+  (incremental detection, odometry reset, filter reseed, map rebuild, goal
+  sequence and online metrics).
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -370,9 +411,13 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
   suite has not been executed yet because the authoring run deliberately
   skipped all test/demo execution. Phase 11 adds 15 tests
   (`test_pose_graph.py` 4, `test_scan_matcher.py` 3, `test_loop_closure.py` 4,
-  `test_slam_loop.py` 4) and those 15 pass; the combined suite is 243 test
-  functions, of which the Phase 11 additions and the touched
-  `test_evaluation.py` were run during authoring.
+  `test_slam_loop.py` 4) and those 15 pass. Phase 12 adds 4 tests
+  (`test_online_slam.py`) and extends `test_evaluation.py` to 26 collected
+  cases. The combined suite is 247 test functions; the 45 tests across
+  `test_online_slam.py`, `test_evaluation.py`, `test_pose_graph.py`,
+  `test_scan_matcher.py`, `test_loop_closure.py` and `test_slam_loop.py` were
+  run during authoring and pass. The rest of the combined suite, including all
+  Phase 10 tests, was not executed.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -407,8 +452,8 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
   - blind baseline: collides at 10.0 s, final distance 20.00 m from the goal
   - no-path branch: scans, backs up, reports `FAILED` with a zero command and no
     collision
-- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs; the suite now has 9
-  scenarios and 27 runs):
+- Phase 7 benchmark (7 scenarios, seeds 0-2, 21 runs; the suite now has 11
+  scenarios and 33 runs):
   - kinematics: Euler `2.10e-4 m`, midpoint `8.76e-7 m`, exact `6.27e-15 m`
     over one circle
   - planning: A* cost `29.021 m`, 103 waypoints, 1,074 vs 4,465 cells expanded
@@ -459,6 +504,25 @@ observed-surface map error from `175` to `135` cells, with zero collisions.
     cost `164.81 → 0.0065`
   - the 15 Phase 11 tests pass; `tests/test_evaluation.py` (24 collected cases)
     passes with the added `slam_loop` kind and `loop` scenario
+- Phase 12 benchmark (`online` scenario, seeds 0-2, 3 runs, default 800
+  particles / 60 beams):
+  - goal reached in every run, zero collisions, `32.3 ± 0.1 s` duration
+  - `129.7 ± 0.6` graph nodes, `2` accepted loop closures in every run
+  - first correction at step `450` (`22.5 s`) in every run
+  - correction magnitude `1.170 ± 0.005 m`
+  - pre-closure node RMS `0.687 ± 0.002 m` → post-closure `0.103 ± 0.001 m`
+  - ATE reduction `85.0 ± 0.2%`; whole-run SLAM RMS `0.099 ± 0.0005 m`;
+    final node error `0.161 ± 0.006 m` after the second leg
+  - graph cost `17.24 ± 0.11` → `0.00459 ± 0.00001`
+  - raw-pose map error `170.3 ± 5.9` cells → corrected map error
+    `125.3 ± 3.1` cells (`45.0 ± 8.7` fewer) on the closure node set
+  - live filter RMS `0.105 ± 0.008 m`, heading RMS `1.13 ± 0.01 deg`
+  - final distance to the second goal `0.014 ± 0.006 m`
+  - seed-0 demo run: `0.689 m → 0.103 m` (85.1%), map `177 → 122` cells,
+    cost `17.13 → 0.0046`, final error `0.012 m`
+  - the 4 Phase 12 tests pass; `tests/test_evaluation.py` (26 collected cases)
+    passes with the added `slam_online` kind, `online` scenario and
+    `goal_sequence` validation
 
 ---
 
@@ -494,6 +558,7 @@ python scripts/phase8_demo.py
 python scripts/phase9_demo.py
 python scripts/phase10_demo.py
 python scripts/phase11_demo.py
+python scripts/phase12_demo.py
 python scripts/evaluate.py
 ```
 
@@ -532,15 +597,16 @@ Repository workflow used so far:
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
 8. **The evaluation suite is deliberately small.** One map per scenario, one
-   route, nine scenario kinds, ten scenarios and three seeds. It is a
+   route, ten scenario kinds, eleven scenarios and three seeds. It is a
    regression harness, not a broad robotics benchmark; aggregation reports
    descriptive statistics only.
 9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
-   narrative experiments with plots and do not call `evaluation/`. Phases 8-11
-   are the exceptions: `phase8_demo.py`, `phase9_demo.py`, `phase10_demo.py` and
-   `phase11_demo.py` share `simulate_*` with their benchmark runners, so the
-   plotted and scored runs cannot drift. A change to a shared component should
-   still run both, because the older harness runs will not catch a plotting or
+   narrative experiments with plots and do not call `evaluation/`. Phases 8-12
+   are the exceptions: `phase8_demo.py`, `phase9_demo.py`, `phase10_demo.py`,
+   `phase11_demo.py` and `phase12_demo.py` share `simulate_*` with their
+   benchmark runners, so the plotted and scored runs cannot drift. A change to a
+   shared component should still run both, because the older harness runs will
+   not catch a plotting or
    narrative regression.
 10. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
     there is no beam width, intensity, multipath or mixed-pixel model.
@@ -1191,13 +1257,81 @@ map from the corrected trajectory, without changing the live control loop.
 
 ---
 
-## 16. Working agreement
+## 16. Phase 12 — Online pose-graph correction (completed)
+
+**Outcome:** Phase 11's back-end now runs inside the drive. The runner checks for
+loop closures every five control steps; when the first closure is verified, it
+optimises the graph, rebuilds the live occupancy map from the corrected poses,
+resets wheel odometry to the corrected node and reseeds the particle filter
+there. The navigator swaps to the repaired map, replans and drives a second goal.
+On the `online` scenario the correction fires at `22.5 s`, moves the chain by
+`1.17 m`, cuts node error from `0.69 m` to `0.10 m` (85%), and the robot finishes
+`0.014 m` from the second goal with zero collisions and `0.105 m` filter RMS.
+
+### Goal
+Apply a pose-graph correction to the live map and control loop when a loop closes,
+and prove the robot can keep navigating afterwards on the corrected map.
+
+### Implemented scope
+1. `Scenario.goal_sequence` — extra goals visited after `goal`, with pair-shape
+   and finiteness validation.
+2. `slam_online` in `KINDS` and the `online` scenario (same `loop_world`, correct
+   prior, first goal `(9.0, 9.5)`, second goal `(10.0, 9.5)`, `max_steps=1600`).
+3. `PoseGraphSlam.close_loops()` made incremental via `_checked_until`;
+   `solve(iterations=20, detect=True)` can skip a redundant detection pass.
+4. `MappingNavigator.replace_map()` and `retarget()` — swap the live map,
+   invalidate the cached grid, clear the old path and reset the follower.
+5. `OnlineSlamMetrics`, `OnlineSlamTrace`, `simulate_online_slam`,
+   `run_online_slam`, dispatcher kind `slam_online` and package exports.
+6. The correction sequence: snapshot raw nodes/map/RMS/cost, optimise, rebuild
+   the map, replace the navigator map, reset odometry, reseed the filter, replan.
+7. `tests/test_online_slam.py` (4 tests) and `tests/test_evaluation.py` updates
+   for the new kind, scenario name and `goal_sequence` validation.
+8. `scripts/phase12_demo.py` — 2 x 3 figure: route with the correction arrow,
+   node error before/after, per-node displacement, raw vs corrected map and the
+   Gauss-Newton cost curve. Saves `experiments/plots/phase12_online_slam.png`.
+9. Docs: `docs/mathematics.md` section 21 and the Phase 12 section of
+   `docs/design_decisions.md`.
+
+### Acceptance (met)
+- Goal reached with zero collisions in every seed.
+- Correction fires mid-run and is reported with step and time (`450`, `22.5 s`).
+- Post-closure RMS is below half the pre-closure RMS (`0.103` vs `0.687`).
+- ATE reduction above 50% (`85.0%`).
+- Corrected map error is below the raw-pose map error (`125.3` vs `170.3` cells)
+  on the same closure node set and observed mask.
+- The robot continues driving after the correction and reaches the second goal
+  (`0.014 m` final error).
+- The 4 Phase 12 tests and the touched `test_evaluation.py` pass, along with the
+  Phase 11 SLAM tests (45 tests in the targeted run). Phase 10 tests, benchmark
+  and demo remain unexecuted by design.
+
+### Deliberate simplifications
+- Only the first verified closure is fed back; later closures add graph edges
+  but do not update control or the live map.
+- No rollback or multi-closure consistency test if a closure is a false positive.
+- The live map is rebuilt from node scans (every fifth step), not every scan.
+- The filter is reseeded with fixed small uncertainty, not a reconstructed
+  posterior.
+- One route, one loop and a correct prior; `min_gap = 80` and the one-shot
+  trigger are tuned to it.
+- Map error remains an observed-surface indicator.
+
+### Verification status
+The Phase 12 tests, demo and three-seed benchmark were run during authoring and
+the measured table is in `docs/mathematics.md` section 21.7 and section 3 above.
+Phase 10's verification debt is unchanged: no full `pytest` run, Phase 10
+benchmark or `phase10_demo.py` run has been performed.
+
+---
+
+## 17. Working agreement
 
 Keep the existing conventions and do not change Phase 0-9 behaviour; the
 230-test Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top
 of that baseline, but the combined suite has not been executed yet. Phase 11
-adds 15 tests (243 test functions total); those 15 and the touched
-`test_evaluation.py` were run during authoring, the rest of the combined suite
-was not. Commit implementation first, docs and demo second. Push only when the
-user explicitly asks, and never present unverified Phase 10 numbers as measured
-results.
+adds 15 tests and Phase 12 adds 4 (247 test functions total); the 45 tests
+covering the Phase 11 and 12 files plus `test_evaluation.py` were run during
+authoring, the rest of the combined suite was not. Commit implementation first,
+docs and demo second. Push only when the user explicitly asks, and never present
+unverified Phase 10 numbers as measured results.

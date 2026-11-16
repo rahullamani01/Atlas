@@ -19,6 +19,7 @@ project in Python (motion model, planning, control, sensing, localization).
 | 9 | Kidnapped-robot relocalization | complete |
 | 10 | Occupancy mapping and map repair | complete |
 | 11 | Pose-graph SLAM and loop closure | complete |
+| 12 | Online pose-graph correction during navigation | complete |
 
 Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
@@ -53,11 +54,20 @@ the graph detects ten closures, cuts node-level trajectory error from `1.00 m`
 to `0.10 m` (90% reduction), and lowers observed-surface map error from `175`
 to `135` cells, with zero collisions.
 
+Phase 12 makes that correction an event inside the run. The same back-end runs
+during navigation; when the first loop closure is verified, the graph is
+optimised mid-drive, the live map is rebuilt from the corrected poses, odometry
+and the particle filter are reset to the corrected node, and the navigator
+replans and continues to a second goal. On the `online` scenario the correction
+fires at `22.5 s` and moves the chain by `1.17 m`, cutting node error from
+`0.69 m` to `0.10 m` (85%); the robot then drives another ~65 nodes on the
+repaired map and finishes `0.014 m` from the second goal with zero collisions.
+
 > **Verification note:** Phases 0-9 were verified before their releases. Phase 10
 > was committed with syntax/import checks only; run `pytest` and
 > `python scripts/phase10_demo.py` to confirm the numbers before treating them
-> as a regression baseline. Phase 11 was verified with its own tests, demo and
-> three-seed benchmark run.
+> as a regression baseline. Phases 11 and 12 were each verified with their own
+> tests, demo and three-seed benchmark run.
 
 ## Layout
 
@@ -94,7 +104,7 @@ src/atlas/
 ├── evaluation/
 │   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
 │   ├── scenarios.py             # named scenario registry and validation
-│   └── harness.py               # runners, integrated/relocalization/mapping/slam traces
+│   └── harness.py               # runners and integrated/relocalization/mapping/SLAM traces
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
@@ -110,7 +120,8 @@ scripts/
 ├── phase9_demo.py               # kidnap detection, global search and recovery
 ├── phase10_demo.py              # map repair, replanning and map-error timeline
 ├── phase11_demo.py              # loop closure, graph convergence and ATE
-└── evaluate.py                  # Phase 7-11 scenario suite with JSON/CSV export
+├── phase12_demo.py              # online correction and continued driving
+└── evaluate.py                  # Phase 7-12 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
 ├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, mapping, SLAM, evaluation
@@ -139,6 +150,7 @@ python scripts/phase8_demo.py
 python scripts/phase9_demo.py
 python scripts/phase10_demo.py
 python scripts/phase11_demo.py
+python scripts/phase12_demo.py
 python scripts/evaluate.py
 ```
 
@@ -162,11 +174,11 @@ python scripts/evaluate.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
-- **Phase 7:** runs all ten scenarios over several seeds and prints aggregate
+- **Phase 7:** runs all eleven scenarios over several seeds and prints aggregate
   tables (mean/std/min/max) for kinematics, planning, tracking, localization,
-  recovery, integrated autonomy, relocalization, mapping and loop closure.
-  `--scenario`, `--seeds`, `--json` and `--csv` select subsets and export
-  results.
+  recovery, integrated autonomy, relocalization, mapping, loop closure and
+  online correction. `--scenario`, `--seeds`, `--json` and `--csv` select
+  subsets and export results.
 - **Phase 8:** runs the recovery scenario on the particle-filter estimate and
   the live dynamic map. Compares against the ground-truth run, reports filter
   error, collisions, replans and detection, and shows the map growing. Plot:
@@ -186,6 +198,12 @@ python scripts/evaluate.py
   optimises with Gauss-Newton and rebuilds the map. Reports node-level ATE
   before and after, graph cost, closure count and map error. Plot:
   `experiments/plots/phase11_loop_closure.png`.
+- **Phase 12:** runs the same loop but corrects mid-drive. The first verified
+  closure optimises the graph, rebuilds the live map, resets odometry and the
+  particle filter to the corrected node, and the robot continues to a second
+  goal on the repaired map. Reports closure step and time, correction magnitude,
+  pre/post ATE, map error and final error. Plot:
+  `experiments/plots/phase12_online_slam.png`.
 
 ## Motion model in brief
 
@@ -367,7 +385,7 @@ map the robot actually has.
 ```python
 from atlas.evaluation import aggregate, get_scenario, run_suite
 
-# Nine scenarios, three seeds: 27 runs, no shared mutable state between runs.
+# Eleven scenarios, three seeds: 33 runs, no shared mutable state between runs.
 results = run_suite(seeds=(0, 1, 2))
 summary = aggregate(results)
 

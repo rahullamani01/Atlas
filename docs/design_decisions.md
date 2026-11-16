@@ -457,3 +457,54 @@
 - **Verified, unlike Phase 10.** The Phase 11 tests, demo and three-seed
   benchmark were run during authoring; the measured table is in
   `docs/mathematics.md` §20.9. Phase 10's verification debt is unchanged.
+
+## Online pose-graph correction (Phase 12)
+
+- **Phase 12 extends Phase 11 in place instead of adding a second back-end.**
+  The same `PoseGraphSlam`, scan matcher and loop closer are reused; the new
+  runner calls `close_loops()` during the drive and pushes the result back into
+  the live system. A parallel implementation would have duplicated the graph and
+  made the two numbers incomparable.
+- **Correction fires once, at the first verified closure.** The event costs a
+  Gauss-Newton solve and a full map rebuild. Repeating it at every check would
+  churn the filter, reset odometry repeatedly and make the route depend on
+  detection timing. One correction is enough to show that the live loop can
+  absorb a back-end correction; repeated correction is listed as future work.
+- **Detection is incremental.** `close_loops()` keeps `_checked_until` so a
+  mid-run call only examines nodes added since the previous call. Without that,
+  calling it every five steps would redo the whole history and make the online
+  phase far slower than the offline one. `solve(detect=False)` prevents the
+  optimiser from running detection a second time.
+- **Odometry is reset to the corrected pose.** Nodes are odometry poses, so
+  leaving the old odometry alive would make the next increment compose from the
+  drifted frame and undo the correction within a few steps. Resetting makes the
+  repaired frame persistent.
+- **The particle filter is reseeded at the corrected node.** Its likelihood grid
+  was built from the pre-correction map; keeping the old estimate or grid would
+  score scans in the wrong frame and pull the filter back toward the drift. The
+  reseed uses the corrected pose from the map-verified closure, not truth.
+- **The map is rebuilt, not warped.** Log-odds cells are not Cartesian points;
+  transforming the grid would resample and thicken evidence. Replaying the
+  stored node scans at corrected poses preserves the evidence exactly and reuses
+  the Phase 11 code path.
+- **`goal_sequence` rather than a new scenario per leg.** The online scenario is
+  the loop route plus a second goal. A goal list keeps the scenario registry
+  small and lets the runner prove continued driving on the corrected map without
+  duplicating the world, route or prior. Validation rejects malformed entries
+  and non-finite coordinates.
+- **A separate `OnlineSlamMetrics` dataclass.** Closure step, closure time,
+  correction magnitude and pre/post RMS are meaningful only when the back-end
+  runs during the drive. Overloading `SlamMetrics` would have forced placeholder
+  values into the offline runner and made the schema lie about what was measured.
+- **Map error is measured at the closure, on the pre-correction node set.**
+  After the correction the robot keeps adding nodes and seeing new cells.
+  Comparing final maps would credit the correction with the extra travel.
+  Building both maps from the nodes that existed at the closure and scoring the
+  common observed mask isolates the correction, as in Phase 11.
+- **The second goal is close on purpose.** `(10.0, 9.5)` is ~1 m beyond the
+  first goal, so the post-correction leg is long enough to show stable driving
+  and short enough that a second unrelated failure mode does not dominate the
+  metrics.
+- **Verified.** The four Phase 12 tests, the touched evaluation tests and the
+  three-seed benchmark were run during authoring; measured numbers are in
+  `docs/mathematics.md` §21.7. Phase 10's verification debt is unchanged.
