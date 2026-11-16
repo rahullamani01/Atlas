@@ -56,6 +56,7 @@ class PoseGraphSlam:
     node_scans: list[LidarScan] = field(default_factory=list)
     loops: list[LoopEvent] = field(default_factory=list)
     cost_history: list[float] = field(default_factory=list)
+    _checked_until: int = field(default=0, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if self.node_stride < 1:
@@ -117,9 +118,13 @@ class PoseGraphSlam:
         )
 
     def close_loops(self) -> None:
-        """Verify candidate closures and add them to the graph."""
+        """Verify candidate closures and add them to the graph.
+
+        Only nodes added since the previous call are examined, so calling this
+        repeatedly from a live loop does not duplicate edges.
+        """
         nodes = len(self.graph.poses)
-        for index in range(self.min_gap, nodes):
+        for index in range(max(self.min_gap, self._checked_until), nodes):
             if index % self.check_interval != 0:
                 continue
             if len(self.loops) >= self.max_loops:
@@ -142,10 +147,12 @@ class PoseGraphSlam:
                 self.loops.append(
                     LoopEvent(index, closure.old, closure.score)
                 )
+        self._checked_until = nodes
 
-    def solve(self, iterations: int = 20) -> None:
-        """Close loops, optimise the graph, and record the cost history."""
-        self.close_loops()
+    def solve(self, iterations: int = 20, detect: bool = True) -> None:
+        """Optionally close loops, then optimise and record the cost history."""
+        if detect:
+            self.close_loops()
         self.cost_history = self.graph.optimize(iterations=iterations)
 
     def map_from(self, poses: list[Pose]) -> LogOddsMap:

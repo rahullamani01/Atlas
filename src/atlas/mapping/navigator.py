@@ -126,6 +126,26 @@ class MappingNavigator:
         self._log("replan", f"{len(self.path)} waypoints")
         return True
 
+    def replace_map(self, occupancy_map: LogOddsMap) -> None:
+        """Swap in a rebuilt map and invalidate the cached planning grid."""
+        self.map = occupancy_map
+        self.map_version += 1
+        self._cached_grid = None
+        self._cached_version = -1
+
+    def retarget(self, goal_cell: Cell) -> None:
+        """Point the navigator at a new goal and clear the old route.
+
+        Used by the online SLAM runner after a mid-run correction or after
+        finishing one goal in a sequence. The caller should plan or step next.
+        """
+        self.goal_cell = goal_cell
+        self.path = []
+        self.follower.reset()
+        self._arrived = False
+        self._cached_grid = None
+        self._cached_version = -1
+
     # ---- main loop ----
 
     def step(self, pose: Pose, scan: LidarScan, dt: float) -> Twist:

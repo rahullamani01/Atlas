@@ -29,12 +29,14 @@ def test_default_suite_covers_every_stage():
         "relocalization",
         "slam",
         "slam_loop",
+        "slam_online",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",
         "tracking_p",
         "slam",
         "loop",
+        "online",
     }
 
 
@@ -55,6 +57,22 @@ def test_unknown_scenario_raises_a_clear_error():
         (
             {"name": "x", "kind": "tracking", "controller": "pd"},
             "controller",
+        ),
+        (
+            {
+                "name": "x",
+                "kind": "slam_online",
+                "goal_sequence": ((1.0,),),
+            },
+            "goal_sequence",
+        ),
+        (
+            {
+                "name": "x",
+                "kind": "slam_online",
+                "goal_sequence": ((float("nan"), 1.0),),
+            },
+            "goal_sequence",
         ),
         (
             {"name": "x", "kind": "recovery", "inject_step": 5},

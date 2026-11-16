@@ -14,6 +14,7 @@ from atlas.evaluation.metrics import (
     MappingMetrics,
     MetricSummary,
     NavigationMetrics,
+    OnlineSlamMetrics,
     PlanningMetrics,
     RelocalizationMetrics,
     SlamMetrics,
@@ -117,6 +118,26 @@ class SlamTrace:
     prior_grid: OccupancyGrid
     raw_grid: OccupancyGrid
     slam_grid: OccupancyGrid
+    truth_grid: OccupancyGrid
+
+
+@dataclass(frozen=True)
+class OnlineSlamTrace:
+    """Detailed record of one online SLAM run with a mid-run correction."""
+
+    metrics: OnlineSlamMetrics
+    trajectory: list[tuple[float, float, float]]
+    filter_errors: list[float]
+    node_pre: list[Pose]
+    node_post: list[Pose]
+    node_truth: list[Pose]
+    loops: list[LoopEvent]
+    cost_history: list[float]
+    closure_step: int
+    prior_grid: OccupancyGrid
+    raw_grid: OccupancyGrid
+    slam_grid: OccupancyGrid
+    final_grid: OccupancyGrid
     truth_grid: OccupancyGrid
 
 
@@ -1110,6 +1131,285 @@ def run_slam(
     return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
 
 
+def simulate_online_slam(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> OnlineSlamTrace:
+    """Drive, correct the pose graph when a loop closes, then keep driving.
+
+    The first leg reaches ``scenario.goal``; ``goal_sequence`` supplies extra
+    goals so the run can continue after the correction. When a loop closure is
+    verified, the graph is optimised mid-run, the live map is rebuilt from the
+    corrected poses, odometry is reset to the corrected pose and the filter is
+    reseeded there. Navigation then continues on the corrected map. Ground truth
+    is read only to score the result.
+    """
+    truth_world = scenario.world()
+    truth_raw = OccupancyGrid.from_world(
+        truth_world, resolution=scenario.resolution
+    )
+    prior_world = (
+        scenario.prior_world() if scenario.prior_world is not None
+        else scenario.world()
+    )
+    prior_raw = OccupancyGrid.from_world(
+        prior_world, resolution=scenario.resolution
+    )
+
+    mapping = LogOddsMap(
+        prior_raw,
+        max_range=LIDAR_RANGE,
+        max_beams=max(beams, 90),
+    )
+    planning = mapping.to_grid(scenario.inflation)
+    start_cell = nearest_free_cell(
+        planning, planning.world_to_cell(*scenario.start)
+    )
+    if start_cell is None:
+        raise RuntimeError("online scenario needs a free start")
+    goal_cells = []
+    for gx, gy in (scenario.goal, *scenario.goal_sequence):
+        cell = planning.world_to_cell(gx, gy)
+        if not planning.is_free(cell):
+            raise RuntimeError(f"scenario {scenario.name!r} has a blocked goal")
+        goal_cells.append(cell)
+    initial = a_star(planning, start_cell, goal_cells[0])
+    if not initial.found:
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+    initial_path = [planning.cell_to_world(cell) for cell in initial.path]
+
+    robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
+    sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        planning,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+    navigator = MappingNavigator(
+        mapping,
+        goal_cells[0],
+        inflation=scenario.inflation,
+        follower=PathFollower(max_linear_speed=SLAM_SPEED),
+    )
+    if not navigator.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
+
+    slam = PoseGraphSlam(prior_raw, min_gap=80, max_loops=20)
+
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    executed = 0
+    last_version = -1
+    goal_index = 0
+    closure_step = -1
+    closure_time = 0.0
+    correction = 0.0
+    pre_closure_rms = 0.0
+    post_closure_rms = 0.0
+    pre_cost = 0.0
+    post_cost = 0.0
+    pre_nodes: list[Pose] = []
+    pre_map: LogOddsMap | None = None
+    closure_map: LogOddsMap | None = None
+    corrected_once = False
+
+    for step in range(scenario.max_steps):
+        estimate = pf.estimate()
+        scan = lidar.scan(truth_world, robot.pose)
+        command = navigator.step(estimate, scan, scenario.dt)
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(
+            command.v, command.w
+        )
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+        pf.update(scan)
+
+        if navigator.map_version != last_version:
+            pf.replace_grid(navigator.planning_grid())
+            last_version = navigator.map_version
+
+        slam.observe(step, odometry.pose, estimate, robot.pose, scan)
+
+        if (
+            not corrected_once
+            and step % slam.check_interval == 0
+            and len(slam.graph.poses) > slam.min_gap
+        ):
+            before = len(slam.loops)
+            slam.close_loops()
+            if len(slam.loops) > before:
+                pre_nodes = [
+                    Pose(pose.x, pose.y, pose.theta)
+                    for pose in slam.node_odometry
+                ]
+                pre_map = slam.map_from(pre_nodes)
+                pre_closure_rms = rms(slam.node_errors(pre_nodes))
+                pre_cost = slam.graph.cost()
+                slam.solve(detect=False)
+                corrected = slam.corrected()
+                post_closure_rms = rms(slam.node_errors(corrected))
+                post_cost = (
+                    slam.cost_history[-1]
+                    if slam.cost_history else slam.graph.cost()
+                )
+                correction = max(
+                    math.hypot(
+                        before_pose.x - after_pose.x,
+                        before_pose.y - after_pose.y,
+                    )
+                    for before_pose, after_pose in zip(pre_nodes, corrected)
+                )
+                closure_step = step
+                closure_time = step * scenario.dt
+                corrected_once = True
+
+                rebuilt = slam.map_from(corrected)
+                closure_map = rebuilt
+                mapping = rebuilt
+                navigator.replace_map(rebuilt)
+                current = corrected[-1]
+                odometry.reset(
+                    Pose(current.x, current.y, current.theta)
+                )
+                pf.replace_grid(rebuilt.to_grid(scenario.inflation))
+                pf.initialize(
+                    current, position_std=0.05, heading_std=0.02
+                )
+                navigator.replan(current)
+                last_version = navigator.map_version
+
+        estimate = pf.estimate()
+        filter_errors.append(math.hypot(
+            estimate.x - robot.pose.x,
+            estimate.y - robot.pose.y,
+        ))
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        )))
+
+        if not ok or navigator.failed:
+            break
+        if navigator.goal_reached:
+            if goal_index + 1 < len(goal_cells):
+                goal_index += 1
+                navigator.retarget(goal_cells[goal_index])
+                if not navigator.plan(pf.estimate()):
+                    navigator.failed = True
+                    break
+            else:
+                break
+
+    final_nodes = slam.corrected()
+    final_errors = slam.node_errors(final_nodes)
+    if pre_map is None:
+        pre_nodes = [
+            Pose(pose.x, pose.y, pose.theta)
+            for pose in slam.node_odometry
+        ]
+        pre_map = slam.map_from(pre_nodes)
+        pre_closure_rms = rms(slam.node_errors(pre_nodes))
+        post_closure_rms = pre_closure_rms
+        pre_cost = slam.graph.cost()
+        post_cost = pre_cost
+    if closure_map is None:
+        closure_map = slam.map_from(
+            final_nodes[: len(pre_nodes)]
+        )
+    final_map = slam.map_from(final_nodes)
+    observed = pre_map.observed & closure_map.observed
+    raw_error = map_error(
+        pre_map.occupancy, truth_raw.blocked, observed
+    )
+    slam_error = map_error(
+        closure_map.occupancy, truth_raw.blocked, observed
+    )
+
+    slam_rms = rms(final_errors)
+    reduction_ratio = (
+        (pre_closure_rms - post_closure_rms) / pre_closure_rms
+        if pre_closure_rms > 0 else 0.0
+    )
+    history = slam.cost_history or [post_cost]
+    goal_world = truth_raw.cell_to_world(goal_cells[-1])
+    reached = (
+        goal_index == len(goal_cells) - 1 and navigator.goal_reached
+    )
+
+    metrics = OnlineSlamMetrics(
+        reached=reached,
+        failed=navigator.failed or sim.collision_count > 0,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        final_error=math.hypot(
+            robot.pose.x - goal_world[0],
+            robot.pose.y - goal_world[1],
+        ),
+        nodes=len(final_nodes),
+        loop_closures=len(slam.loops),
+        closure_step=closure_step,
+        closure_time=closure_time,
+        correction=correction,
+        pre_closure_rms=pre_closure_rms,
+        post_closure_rms=post_closure_rms,
+        ate_reduction=reduction_ratio,
+        slam_rms=slam_rms,
+        slam_final=final_errors[-1],
+        graph_cost_before=pre_cost,
+        graph_cost_after=history[-1],
+        raw_map_error=raw_error,
+        slam_map_error=slam_error,
+        map_error_reduction=raw_error - slam_error,
+        filter_rms=rms(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return OnlineSlamTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        filter_errors=filter_errors,
+        node_pre=pre_nodes,
+        node_post=final_nodes,
+        node_truth=slam.node_truth,
+        loops=list(slam.loops),
+        cost_history=list(history),
+        closure_step=closure_step,
+        prior_grid=prior_raw,
+        raw_grid=pre_map.to_grid(0.0),
+        slam_grid=closure_map.to_grid(0.0),
+        final_grid=final_map.to_grid(0.0),
+        truth_grid=truth_raw,
+    )
+
+
+def run_online_slam(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+) -> ScenarioResult:
+    """Evaluate online pose-graph correction during navigation."""
+    trace = simulate_online_slam(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -1130,6 +1430,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_mapping(scenario, seed=seed)
     if scenario.kind == "slam_loop":
         return run_slam(scenario, seed=seed)
+    if scenario.kind == "slam_online":
+        return run_online_slam(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 

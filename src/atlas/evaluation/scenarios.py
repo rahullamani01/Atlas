@@ -21,6 +21,7 @@ KINDS = (
     "relocalization",
     "slam",
     "slam_loop",
+    "slam_online",
 )
 CONTROLLERS = ("p", "pid")
 
@@ -66,13 +67,16 @@ class Scenario:
     """One reproducible experiment configuration.
 
     ``kind`` selects the runner: kinematics, planning, tracking, localization,
-    recovery, integrated, relocalization, slam or slam_loop. ``controller`` and
+    recovery, integrated, relocalization, slam, slam_loop or slam_online.
+    ``controller`` and
     ``yaw_bias`` only affect tracking runs. ``inject_step`` / ``inject_rect``
     add a new obstacle after the given control step, which is how the recovery
     scenario changes the world mid-run. ``kidnap_step`` / ``kidnap_pose``
     teleport the robot for the relocalization scenario; odometry does not
     observe the move. ``prior_world`` supplies the map the robot starts with
     for mapping runs; it may omit real obstacles and contain phantom ones.
+    ``goal_sequence`` lists extra goals visited after ``goal``; the online SLAM
+    runner uses it to continue driving after a loop closure.
     """
 
     name: str
@@ -81,6 +85,7 @@ class Scenario:
     prior_world: Callable[[], World] | None = None
     start: tuple[float, float] = (1.125, 1.125)
     goal: tuple[float, float] = (18.125, 18.125)
+    goal_sequence: tuple[tuple[float, float], ...] = ()
     resolution: float = 0.25
     inflation: float = 0.25
     dt: float = 0.05
@@ -107,6 +112,11 @@ class Scenario:
             raise ValueError("max_steps must be positive")
         if self.controller not in CONTROLLERS:
             raise ValueError(f"controller must be one of {CONTROLLERS}")
+        for extra_goal in self.goal_sequence:
+            if len(extra_goal) != 2:
+                raise ValueError("goal_sequence entries must be (x, y)")
+            if not all(math.isfinite(value) for value in extra_goal):
+                raise ValueError("goal_sequence values must be finite")
         if self.prior_world is not None and not callable(self.prior_world):
             raise ValueError("prior_world must be callable")
         if (self.inject_step is None) != (self.inject_rect is None):
@@ -197,6 +207,17 @@ SCENARIOS: dict[str, Scenario] = {
         goal=(9.0, 9.5),
         inflation=0.30,
         max_steps=1200,
+    ),
+    "online": Scenario(
+        name="online",
+        kind="slam_online",
+        world=loop_world,
+        prior_world=loop_world,
+        start=(7.0, 9.5),
+        goal=(9.0, 9.5),
+        goal_sequence=((10.0, 9.5),),
+        inflation=0.30,
+        max_steps=1600,
     ),
 }
 
