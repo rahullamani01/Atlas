@@ -22,6 +22,7 @@ KINDS = (
     "slam",
     "slam_loop",
     "slam_online",
+    "exploration",
 )
 CONTROLLERS = ("p", "pid")
 
@@ -62,12 +63,18 @@ def loop_world() -> World:
     ])
 
 
+def empty_world() -> World:
+    """An unknown starting map: demo-world extent with no obstacles."""
+    return World(20, 20, [])
+
+
 @dataclass(frozen=True)
 class Scenario:
     """One reproducible experiment configuration.
 
     ``kind`` selects the runner: kinematics, planning, tracking, localization,
-    recovery, integrated, relocalization, slam, slam_loop or slam_online.
+    recovery, integrated, relocalization, slam, slam_loop, slam_online or
+    exploration.
     ``controller`` and
     ``yaw_bias`` only affect tracking runs. ``inject_step`` / ``inject_rect``
     add a new obstacle after the given control step, which is how the recovery
@@ -77,6 +84,8 @@ class Scenario:
     for mapping runs; it may omit real obstacles and contain phantom ones.
     ``goal_sequence`` lists extra goals visited after ``goal``; the online SLAM
     runner uses it to continue driving after a loop closure.
+    ``coverage_target`` is the observed map fraction that ends an exploration
+    run, so the robot stops on its own evidence rather than on a step budget.
     """
 
     name: str
@@ -96,6 +105,7 @@ class Scenario:
     inject_rect: tuple[float, float, float, float] | None = None
     kidnap_step: int | None = None
     kidnap_pose: tuple[float, float, float] | None = None
+    coverage_target: float = 0.95
 
     def __post_init__(self) -> None:
         if not self.name:
@@ -140,6 +150,8 @@ class Scenario:
                 raise ValueError("kidnap_pose must be (x, y, theta)")
             if not all(math.isfinite(value) for value in self.kidnap_pose):
                 raise ValueError("kidnap_pose values must be finite")
+        if not 0.0 < self.coverage_target <= 1.0:
+            raise ValueError("coverage_target must be in (0, 1]")
 
 
 SCENARIOS: dict[str, Scenario] = {
@@ -218,6 +230,15 @@ SCENARIOS: dict[str, Scenario] = {
         goal_sequence=((10.0, 9.5),),
         inflation=0.30,
         max_steps=1600,
+    ),
+    "explore": Scenario(
+        name="explore",
+        kind="exploration",
+        world=demo_world,
+        prior_world=empty_world,
+        inflation=0.30,
+        max_steps=2600,
+        coverage_target=0.95,
     ),
 }
 

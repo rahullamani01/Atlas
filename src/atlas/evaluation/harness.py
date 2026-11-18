@@ -6,8 +6,11 @@ import time
 from dataclasses import dataclass
 from typing import Sequence
 
+import numpy as np
+
 from atlas.control import PID, PathFollower, Twist
 from atlas.evaluation.metrics import (
+    ExplorationMetrics,
     IntegratedMetrics,
     KinematicsMetrics,
     LocalizationMetrics,
@@ -24,6 +27,7 @@ from atlas.evaluation.metrics import (
     summarize,
 )
 from atlas.evaluation.scenarios import Scenario, default_scenarios
+from atlas.exploration import select_viewpoint
 from atlas.localization import LocalizationMonitor, ParticleFilter, Relocalizer
 from atlas.mapping import LogOddsMap, MapEvent, MappingNavigator, map_error
 from atlas.perception import DynamicObstacleMap
@@ -137,6 +141,23 @@ class OnlineSlamTrace:
     prior_grid: OccupancyGrid
     raw_grid: OccupancyGrid
     slam_grid: OccupancyGrid
+    final_grid: OccupancyGrid
+    truth_grid: OccupancyGrid
+
+
+@dataclass(frozen=True)
+class ExplorationTrace:
+    """Detailed record of one next-best-view exploration run."""
+
+    metrics: ExplorationMetrics
+    trajectory: list[tuple[float, float, float]]
+    filter_errors: list[float]
+    heading_errors: list[float]
+    coverage_history: list[tuple[int, float]]
+    truth_coverage_history: list[tuple[int, float]]
+    viewpoints: list[tuple[int, int]]
+    events: list[MapEvent]
+    prior_grid: OccupancyGrid
     final_grid: OccupancyGrid
     truth_grid: OccupancyGrid
 
@@ -1410,6 +1431,249 @@ def run_online_slam(
     return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
 
 
+def simulate_exploration(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 300,
+    beams: int = 40,
+    spacing: int = 8,
+    radius_cells: int = 40,
+    min_gain: int = 40,
+    coverage_interval: int = 25,
+    max_failures: int = 15,
+) -> ExplorationTrace:
+    """Explore an unknown map by driving to next-best viewpoints.
+
+    The robot starts from an empty prior, so every cell is unknown and no route
+    exists to a goal. It repeatedly scores a coarse lattice of candidate cells
+    by the unknown area within LiDAR range divided by the A* cost, drives to the
+    best one, and re-scores after each arrival. Unknown cells are free to the
+    planner, which lets the robot leave the observed region; a target that turns
+    out to be blocked is blacklisted and replaced instead of ending the run.
+
+    The run ends when the observed fraction of the map reaches
+    ``scenario.coverage_target``. That fraction comes from map state only, so
+    the stopping rule needs no ground truth. Ground truth is read afterwards to
+    score free-space coverage and map error.
+    """
+    truth_world = scenario.world()
+    truth_raw = OccupancyGrid.from_world(
+        truth_world, resolution=scenario.resolution
+    )
+    prior_world = (
+        scenario.prior_world() if scenario.prior_world is not None
+        else scenario.world()
+    )
+    prior_raw = OccupancyGrid.from_world(
+        prior_world, resolution=scenario.resolution
+    )
+
+    unknown = np.zeros_like(prior_raw.blocked)
+    mapping = LogOddsMap(
+        prior_raw,
+        max_range=LIDAR_RANGE,
+        max_beams=max(beams, 240),
+        known=unknown.copy(),
+    )
+    planning = mapping.to_grid(scenario.inflation)
+    start_cell = nearest_free_cell(
+        planning, planning.world_to_cell(*scenario.start)
+    )
+    if start_cell is None:
+        raise RuntimeError(f"scenario {scenario.name!r} needs a free start")
+
+    robot = DifferentialDriveRobot(
+        pose=Pose(*planning.cell_to_world(start_cell), 0.0)
+    )
+    sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    odometry = Odometry(
+        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+    )
+    odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
+    pf = ParticleFilter(
+        planning,
+        n_particles=particles,
+        max_beams=beams,
+        likelihood_scale=LIKELIHOOD_SCALE,
+        seed=seed,
+    )
+    pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
+
+    scan = lidar.scan(truth_world, robot.pose)
+    mapping.integrate(scan, robot.pose)
+    pick = select_viewpoint(
+        mapping,
+        mapping.to_grid(scenario.inflation),
+        start_cell,
+        spacing=spacing,
+        radius=radius_cells,
+        min_gain=min_gain,
+    )
+    if pick is None:
+        raise RuntimeError(
+            f"scenario {scenario.name!r} starts with no viewpoint"
+        )
+    navigator = MappingNavigator(
+        mapping,
+        pick.cell,
+        inflation=scenario.inflation,
+        follower=PathFollower(max_linear_speed=SLAM_SPEED),
+    )
+    if not navigator.plan(pf.estimate()):
+        raise RuntimeError(f"scenario {scenario.name!r} has no initial route")
+
+    visited: list[tuple[int, int]] = []
+    blacklist: list[tuple[int, int]] = []
+    viewpoints: list[tuple[int, int]] = [pick.cell]
+    trajectory = [(robot.pose.x, robot.pose.y, robot.pose.theta)]
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    coverage_history: list[tuple[int, float]] = []
+    truth_coverage_history: list[tuple[int, float]] = []
+    executed = 0
+    failures = 0
+    completed = False
+    last_version = -1
+
+    truth_free = np.count_nonzero(~truth_raw.blocked)
+
+    def free_coverage() -> float:
+        if not truth_free:
+            return 0.0
+        observed_free = np.count_nonzero(
+            mapping.observed & ~truth_raw.blocked
+        )
+        return observed_free / truth_free
+
+    def next_viewpoint() -> str:
+        """Choose and plan to a fresh viewpoint.
+
+        Returns ``"ok"`` when a route was planned, ``"exhausted"`` when no
+        candidate has useful gain, and ``"failed"`` when the chosen candidate
+        could not be reached from here.
+        """
+        grid = navigator.planning_grid()
+        here = nearest_free_cell(
+            grid, grid.world_to_cell(robot.pose.x, robot.pose.y)
+        )
+        if here is None:
+            return "exhausted"
+        choice = select_viewpoint(
+            navigator.map,
+            grid,
+            here,
+            spacing=spacing,
+            radius=radius_cells,
+            min_gain=min_gain,
+            visited=visited,
+            blacklist=blacklist,
+        )
+        if choice is None:
+            return "exhausted"
+        navigator.retarget(choice.cell)
+        if not navigator.plan(pf.estimate()):
+            blacklist.append(choice.cell)
+            return "failed"
+        viewpoints.append(choice.cell)
+        return "ok"
+
+    for step in range(scenario.max_steps):
+        estimate = pf.estimate()
+        scan = lidar.scan(truth_world, robot.pose)
+        command = navigator.step(estimate, scan, scenario.dt)
+        ok = sim.step(command.v, command.w)
+        executed += 1
+        trajectory.append((robot.pose.x, robot.pose.y, robot.pose.theta))
+
+        wheel_l, wheel_r = robot.twist_to_wheel_speeds(command.v, command.w)
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+        pf.update(scan)
+
+        if navigator.map_version != last_version:
+            pf.replace_grid(navigator.planning_grid())
+            last_version = navigator.map_version
+
+        estimate = pf.estimate()
+        filter_errors.append(math.hypot(
+            estimate.x - robot.pose.x,
+            estimate.y - robot.pose.y,
+        ))
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - robot.pose.theta),
+            math.cos(estimate.theta - robot.pose.theta),
+        )))
+        if step % coverage_interval == 0:
+            coverage_history.append((step, mapping.observed_ratio))
+            truth_coverage_history.append((step, free_coverage()))
+
+        if not ok:
+            break
+        if mapping.observed_ratio >= scenario.coverage_target:
+            completed = True
+            break
+        if navigator.failed:
+            failures += 1
+            blacklist.append(navigator.goal_cell)
+            if failures > max_failures:
+                break
+            navigator.failed = False
+            if next_viewpoint() == "exhausted":
+                break
+            continue
+        if navigator.goal_reached:
+            visited.append(navigator.goal_cell)
+            if next_viewpoint() == "exhausted":
+                break
+            continue
+
+    coverage = mapping.observed_ratio
+    free_coverage_final = free_coverage()
+    metrics = ExplorationMetrics(
+        completed=completed,
+        failed=sim.collision_count > 0 or failures > max_failures,
+        collisions=sim.collision_count,
+        duration=executed * scenario.dt,
+        coverage=coverage,
+        free_coverage=free_coverage_final,
+        map_error=map_error(
+            mapping.occupancy, truth_raw.blocked, mapping.observed
+        ),
+        viewpoints=len(viewpoints),
+        steps=executed,
+        filter_rms=rms(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+    )
+    return ExplorationTrace(
+        metrics=metrics,
+        trajectory=trajectory,
+        filter_errors=filter_errors,
+        heading_errors=heading_errors,
+        coverage_history=coverage_history,
+        truth_coverage_history=truth_coverage_history,
+        viewpoints=viewpoints,
+        events=list(navigator.events),
+        prior_grid=prior_raw,
+        final_grid=mapping.to_grid(0.0),
+        truth_grid=truth_raw,
+    )
+
+
+def run_exploration(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 300,
+    beams: int = 40,
+) -> ScenarioResult:
+    """Evaluate next-best-view exploration on an unknown map."""
+    trace = simulate_exploration(
+        scenario, seed=seed, particles=particles, beams=beams
+    )
+    return ScenarioResult(scenario.name, seed, trace.metrics.as_dict())
+
+
 def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     """Dispatch a scenario to its runner."""
     if scenario.kind == "kinematics":
@@ -1432,6 +1696,8 @@ def run_scenario(scenario: Scenario, seed: int = 0) -> ScenarioResult:
         return run_slam(scenario, seed=seed)
     if scenario.kind == "slam_online":
         return run_online_slam(scenario, seed=seed)
+    if scenario.kind == "exploration":
+        return run_exploration(scenario, seed=seed)
     raise ValueError(f"unknown scenario kind: {scenario.kind!r}")
 
 

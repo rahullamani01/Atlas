@@ -30,6 +30,7 @@ def test_default_suite_covers_every_stage():
         "slam",
         "slam_loop",
         "slam_online",
+        "exploration",
     }
     assert {scenario.name for scenario in scenarios} >= {
         "tracking_pid",
@@ -37,6 +38,7 @@ def test_default_suite_covers_every_stage():
         "slam",
         "loop",
         "online",
+        "explore",
     }
 
 
@@ -129,6 +131,14 @@ def test_unknown_scenario_raises_a_clear_error():
         (
             {"name": "x", "kind": "slam", "prior_world": object()},
             "prior_world",
+        ),
+        (
+            {"name": "x", "kind": "exploration", "coverage_target": 0},
+            "coverage_target",
+        ),
+        (
+            {"name": "x", "kind": "exploration", "coverage_target": 1.5},
+            "coverage_target",
         ),
     ],
 )

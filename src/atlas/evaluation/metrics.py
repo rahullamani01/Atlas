@@ -407,6 +407,44 @@ class OnlineSlamMetrics:
 
 
 @dataclass(frozen=True)
+class ExplorationMetrics:
+    """Outcome of a next-best-view exploration run.
+
+    ``coverage`` is the fraction of the robot's map cells it has observed. It
+    is computed only from map state, so it can end the run without ground
+    truth. ``free_coverage`` is the scoring metric: the fraction of truly free
+    cells the robot managed to observe.
+    """
+
+    completed: bool
+    failed: bool
+    collisions: int
+    duration: float
+    coverage: float
+    free_coverage: float
+    map_error: int
+    viewpoints: int
+    steps: int
+    filter_rms: float
+    filter_heading_rms_deg: float
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "completed": 1.0 if self.completed else 0.0,
+            "failed": 1.0 if self.failed else 0.0,
+            "collisions": self.collisions,
+            "duration": self.duration,
+            "coverage": self.coverage,
+            "free_coverage": self.free_coverage,
+            "map_error": self.map_error,
+            "viewpoints": self.viewpoints,
+            "steps": self.steps,
+            "filter_rms": self.filter_rms,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+        }
+
+
+@dataclass(frozen=True)
 class IntegratedMetrics:
     reached: bool
     failed: bool
