@@ -20,6 +20,7 @@ project in Python (motion model, planning, control, sensing, localization).
 | 10 | Occupancy mapping and map repair | complete |
 | 11 | Pose-graph SLAM and loop closure | complete |
 | 12 | Online pose-graph correction during navigation | complete |
+| 13 | Next-best-view exploration of an unknown map | complete |
 
 Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
@@ -63,10 +64,20 @@ fires at `22.5 s` and moves the chain by `1.17 m`, cutting node error from
 `0.69 m` to `0.10 m` (85%); the robot then drives another ~65 nodes on the
 repaired map and finishes `0.014 m` from the second goal with zero collisions.
 
+Phase 13 removes the last assumption: that the map is known in extent. The
+`explore` scenario starts from an empty prior where every cell is unknown, and
+a next-best-view policy scores a coarse lattice of candidate cells by the
+unknown area within LiDAR range divided by the A* travel cost. Unknown cells
+are free to the planner, so the robot walks out of the observed region;
+unreachable targets are blacklisted and replaced. Across seeds 0-2 it reached
+the 95% observed-map target in `112 s`, visited `18.7` viewpoints, covered
+`96.2%` of truly free space, and finished with zero collisions, `0.093 m`
+filter RMS and `322` cells of observed-surface map error.
+
 > **Verification note:** Phases 0-9 were verified before their releases. Phase 10
 > was committed with syntax/import checks only; run `pytest` and
 > `python scripts/phase10_demo.py` to confirm the numbers before treating them
-> as a regression baseline. Phases 11 and 12 were each verified with their own
+> as a regression baseline. Phases 11-13 were each verified with their own
 > tests, demo and three-seed benchmark run.
 
 ## Layout
@@ -101,14 +112,16 @@ src/atlas/
 │   ├── scan_matcher.py          # correlative pose search on a distance field
 │   ├── loop_closure.py          # proximity candidates and map verification
 │   └── slam.py                  # collect run, close loops, rebuild the map
+├── exploration/
+│   └── viewpoint.py             # unknown-area gain, lattice, next-best-view score
 ├── evaluation/
 │   ├── metrics.py               # RMS, cross-track, summaries, metric dataclasses
 │   ├── scenarios.py             # named scenario registry and validation
-│   └── harness.py               # runners and integrated/relocalization/mapping/SLAM traces
+│   └── harness.py               # runners and integrated/relocalization/mapping/SLAM/exploration traces
 └── simulation/
     ├── world.py                 # boundaries and rectangular obstacles
     └── simulator.py             # timestep loop, collisions, trajectory log
-tests/                           # regression tests across geometry, motion, planning, control, sensing, localization, perception, mapping, recovery, integration, relocalization, SLAM, evaluation
+tests/                           # regression tests across geometry, motion, planning, control, sensing, localization, perception, mapping, recovery, integration, relocalization, SLAM, exploration, evaluation
 scripts/
 ├── phase1_demo.py               # kinematics and integration-error experiments
 ├── phase2_demo.py               # Dijkstra vs A* on an inflated grid
@@ -121,10 +134,11 @@ scripts/
 ├── phase10_demo.py              # map repair, replanning and map-error timeline
 ├── phase11_demo.py              # loop closure, graph convergence and ATE
 ├── phase12_demo.py              # online correction and continued driving
-└── evaluate.py                  # Phase 7-12 scenario suite with JSON/CSV export
+├── phase13_demo.py              # next-best-view exploration of an unknown map
+└── evaluate.py                  # Phase 7-13 scenario suite with JSON/CSV export
 docs/
 ├── design_decisions.md
-├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, mapping, SLAM, evaluation
+├── mathematics.md               # derivations for kinematics, search, control, sensing, localization, recovery, integration, relocalization, mapping, SLAM, exploration, evaluation
 └── handoff.md                   # project state and next-stage plan
 ```
 
@@ -151,6 +165,7 @@ python scripts/phase9_demo.py
 python scripts/phase10_demo.py
 python scripts/phase11_demo.py
 python scripts/phase12_demo.py
+python scripts/phase13_demo.py
 python scripts/evaluate.py
 ```
 
@@ -174,11 +189,11 @@ python scripts/evaluate.py
   navigation against a blind baseline. Reports detection, replanning, collisions
   and goal distance, and shows the dynamic obstacle map growing. Plot:
   `experiments/plots/phase6_recovery.png`.
-- **Phase 7:** runs all eleven scenarios over several seeds and prints aggregate
+- **Phase 7:** runs all twelve scenarios over several seeds and prints aggregate
   tables (mean/std/min/max) for kinematics, planning, tracking, localization,
-  recovery, integrated autonomy, relocalization, mapping, loop closure and
-  online correction. `--scenario`, `--seeds`, `--json` and `--csv` select
-  subsets and export results.
+  recovery, integrated autonomy, relocalization, mapping, loop closure, online
+  correction and exploration. `--scenario`, `--seeds`, `--json` and `--csv`
+  select subsets and export results.
 - **Phase 8:** runs the recovery scenario on the particle-filter estimate and
   the live dynamic map. Compares against the ground-truth run, reports filter
   error, collisions, replans and detection, and shows the map growing. Plot:
@@ -204,6 +219,13 @@ python scripts/evaluate.py
   goal on the repaired map. Reports closure step and time, correction magnitude,
   pre/post ATE, map error and final error. Plot:
   `experiments/plots/phase12_online_slam.png`.
+- **Phase 13:** starts with an empty prior, so every cell is unknown. Scores a
+  coarse lattice of viewpoints by unknown area within LiDAR range per unit of
+  travel, drives to the best reachable one, and re-scores after each arrival.
+  Unknown cells are free to the planner and unreachable targets are blacklisted.
+  Stops when the observed map fraction reaches the coverage target. Reports
+  coverage, free-space coverage, viewpoints, collisions, map error and filter
+  RMS. Plot: `experiments/plots/phase13_exploration.png`.
 
 ## Motion model in brief
 

@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 16 November 2026
-**Branch:** `main` (Phase 12 complete; working tree clean)
-**Latest work:** Phase 12 — online pose-graph correction during navigation
-**Tests:** 247 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
+**Date:** 18 November 2026
+**Branch:** `main` (Phase 13 complete)
+**Latest work:** Phase 13 — next-best-view exploration of an unknown map
+**Tests:** 256 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -25,6 +25,7 @@
 | 10 | Occupancy mapping and map repair | implementation complete; verification pending |
 | 11 | Pose-graph SLAM and loop closure | complete |
 | 12 | Online pose-graph correction during navigation | complete |
+| 13 | Next-best-view exploration of an unknown map | complete |
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
@@ -63,6 +64,15 @@ navigator replans and continues to a second goal. On the `online` scenario the
 correction fires at `22.5 s`, moves the chain by `1.17 m`, cuts node error from
 `0.69 m` to `0.10 m` (85%), and the robot finishes `0.014 m` from the second goal
 with zero collisions on the repaired map.
+
+Phase 13 adds the policy Phase 10 lacked. The `explore` scenario starts from an
+empty prior where every cell is unknown, scores a coarse lattice of candidate
+viewpoints by unknown area within LiDAR range divided by A* travel cost, and
+drives to the best reachable one. Unknown cells are free to the planner, so the
+robot leaves the observed region; failed targets are blacklisted. The run stops
+when 95% of the bounded map has been observed. Across seeds 0-2 it covered
+`96.2%` of truly free space with zero collisions, `18.7` viewpoints, `0.093 m`
+filter RMS and `322` cells of observed-surface map error.
 
 ---
 
@@ -283,6 +293,19 @@ with zero collisions on the repaired map.
 - `run_online_slam(...) -> ScenarioResult` — benchmark wrapper and dispatcher
   entry for kind `slam_online`.
 
+### Phase 13 — exploration (`src/atlas/exploration/`)
+- `Viewpoint(cell, gain, cost, score)` — a scored target; `gain` is unknown
+  cells in the LiDAR disk, `cost` is A* travel cost and `score` is
+  `gain / (1 + cost)`.
+- `unknown_area(unknown, cell, radius=40)` — count unknown cells in a disk,
+  clipped at the map border.
+- `candidate_cells(grid, spacing=8, *, visited=(), blacklist=(), start=None)`
+  — free half-spacing-offset lattice points, excluding the current cell and
+  targets within one spacing of a visited or failed cell.
+- `select_viewpoint(mapping, grid, start, *, spacing, radius, min_gain,
+  visited, blacklist)` — nearest-free conversion, gain threshold, A* and the
+  best score; returns `None` when nothing useful is reachable.
+
 ### Phase 7 — evaluation (`src/atlas/evaluation/`)
 - `metrics.py`
   - `rms(values)`, `segment_projection(point, a, b)`,
@@ -291,25 +314,26 @@ with zero collisions on the repaired map.
   - metric dataclasses: `KinematicsMetrics`, `PlanningMetrics`,
     `TrackingMetrics`, `LocalizationMetrics`, `NavigationMetrics`,
     `IntegratedMetrics`, `RelocalizationMetrics`, `MappingMetrics`,
-    `SlamMetrics`, `OnlineSlamMetrics`
+    `SlamMetrics`, `OnlineSlamMetrics`, `ExplorationMetrics`
   - every dataclass has `as_dict()` returning a flat float/int dictionary;
     aggregate summaries also expose `as_dict()`
 - `scenarios.py`
   - `Scenario(name, kind, world, prior_world, start, goal, goal_sequence,
     resolution, inflation, dt, max_steps, controller, yaw_bias, inject_step,
-    inject_rect, kidnap_step, kidnap_pose)` with validation
+    inject_rect, kidnap_step, kidnap_pose, coverage_target)` with validation
   - `demo_world()` returns a fresh 20 x 20 world per run; `slam_world()` and
     `slam_prior_world()` supply the Phase 10 truth/prior pair; `loop_world()`
-    is the Phase 11 16 x 16 map with a wall between start and goal
+    is the Phase 11 16 x 16 map with a wall between start and goal;
+    `empty_world()` is the Phase 13 blank 20 x 20 prior
   - `SCENARIOS`, `get_scenario(name)`, `default_scenarios()`
-  - eleven scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
+  - twelve scenarios: `kinematics`, `planning`, `tracking_pid`, `tracking_p`,
     `localization`, `recovery`, `integrated`, `relocalization`, `slam`, `loop`,
-    `online`
+    `online`, `explore`
 - `harness.py`
   - `ScenarioResult(scenario, seed, metrics)`
   - `run_kinematics`, `run_planning`, `run_tracking`, `run_localization`,
     `run_recovery`, `run_integrated`, `run_relocalization`, `run_mapping`,
-    `run_slam`, `run_online_slam`
+    `run_slam`, `run_online_slam`, `run_exploration`
   - `simulate_integrated(...) -> IntegratedTrace` runs the closed loop once and
     returns the trajectory, per-step odometry/filter/heading errors, detection
     counts, supervisor events and detected cells; the benchmark runner and the
@@ -333,6 +357,11 @@ with zero collisions on the repaired map.
     corrected node; the run then continues through `goal_sequence`. Returns the
     pre/post node sets, closure step, cost history and the raw/closure/final
     grids for comparison
+  - `simulate_exploration(...) -> ExplorationTrace` starts from an empty prior,
+    selects and drives to next-best viewpoints until the observed map fraction
+    reaches `coverage_target` or no useful viewpoint is reachable, and returns
+    the trajectory, filter/heading errors, coverage histories, viewpoints,
+    navigator events and prior/final/truth grids
   - `run_scenario(scenario, seed)`, `run_suite(scenarios, seeds)`
   - `aggregate(results)` groups by scenario and summarizes each metric
 
@@ -377,6 +406,11 @@ with zero collisions on the repaired map.
   route with odometry vs corrected nodes and the correction arrow, per-node error
   before/after, node displacement, the raw vs corrected map and the optimiser
   cost curve. Saves `experiments/plots/phase12_online_slam.png`.
+- `scripts/phase13_demo.py` — drives the `explore` scenario from an empty prior.
+  Plots the blank prior, the true world, the final map with path and viewpoints,
+  the observed and free-space coverage timelines, position/heading error and the
+  time-coloured trajectory. Saves
+  `experiments/plots/phase13_exploration.png`.
 - `scripts/evaluate.py` — runs the scenario suite across seeds, prints aggregate
   tables, and exports JSON/CSV (`--scenario`, `--seeds`, `--json`, `--csv`,
   `--list`).
@@ -398,7 +432,9 @@ with zero collisions on the repaired map.
   (SE(2) composition, residual, Gauss-Newton, scan matching, loop verification,
   map rebuild and SLAM metrics), and the Phase 12 online correction loop
   (incremental detection, odometry reset, filter reseed, map rebuild, goal
-  sequence and online metrics).
+  sequence and online metrics), plus the Phase 13 exploration problem (unknown
+  map representation, lattice gain, score, optimistic planning, blacklisting,
+  truth-free stopping and exploration metrics).
 - `docs/design_decisions.md` — all conventions and deliberate simplifications.
 - `README.md` — status, layout, setup, demos, usage snippets.
 
@@ -412,10 +448,11 @@ with zero collisions on the repaired map.
   skipped all test/demo execution. Phase 11 adds 15 tests
   (`test_pose_graph.py` 4, `test_scan_matcher.py` 3, `test_loop_closure.py` 4,
   `test_slam_loop.py` 4) and those 15 pass. Phase 12 adds 4 tests
-  (`test_online_slam.py`) and extends `test_evaluation.py` to 26 collected
-  cases. The combined suite is 247 test functions; the 45 tests across
-  `test_online_slam.py`, `test_evaluation.py`, `test_pose_graph.py`,
-  `test_scan_matcher.py`, `test_loop_closure.py` and `test_slam_loop.py` were
+  (`test_online_slam.py`) and Phase 13 adds 9 (`test_exploration.py`), while
+  `test_evaluation.py` grows to 28 collected cases. The combined suite is 256
+  test functions; the 56 tests across `test_online_slam.py`,
+  `test_evaluation.py`, `test_pose_graph.py`, `test_scan_matcher.py`,
+  `test_loop_closure.py`, `test_slam_loop.py` and `test_exploration.py` were
   run during authoring and pass. The rest of the combined suite, including all
   Phase 10 tests, was not executed.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
@@ -523,6 +560,20 @@ with zero collisions on the repaired map.
   - the 4 Phase 12 tests pass; `tests/test_evaluation.py` (26 collected cases)
     passes with the added `slam_online` kind, `online` scenario and
     `goal_sequence` validation
+- Phase 13 benchmark (`explore` scenario, seeds 0-2, 3 runs, default 300
+  particles / 40 beams):
+  - completed in every run, zero failures and zero collisions, `112.27 ± 0.38 s`
+    duration
+  - map coverage `95.01 ± 0.02%` (the stopping signal), free-space coverage
+    `96.18 ± 0.12%`
+  - `18.7 ± 0.6` viewpoints, `2245.3 ± 7.6` steps
+  - observed-surface map error `321.7 ± 9.6` cells
+  - live filter RMS `0.0932 ± 0.0007 m`, heading RMS `1.13 ± 0.06 deg`
+  - seed-0 demo run: `95.0%` map coverage, `96.1%` free coverage, `19`
+    viewpoints, `2242` steps, `320` cells, `0.093 m` filter RMS
+  - the 9 Phase 13 tests pass; `tests/test_evaluation.py` (28 collected cases)
+    passes with the added `exploration` kind, `explore` scenario and
+    `coverage_target` validation
 
 ---
 
@@ -559,6 +610,7 @@ python scripts/phase9_demo.py
 python scripts/phase10_demo.py
 python scripts/phase11_demo.py
 python scripts/phase12_demo.py
+python scripts/phase13_demo.py
 python scripts/evaluate.py
 ```
 
@@ -597,17 +649,15 @@ Repository workflow used so far:
    the current route becomes blocked; moving objects are treated as static and
    there is no tracking or prediction.
 8. **The evaluation suite is deliberately small.** One map per scenario, one
-   route, ten scenario kinds, eleven scenarios and three seeds. It is a
+   route, eleven scenario kinds, twelve scenarios and three seeds. It is a
    regression harness, not a broad robotics benchmark; aggregation reports
    descriptive statistics only.
 9. **Demos and the harness are mostly separate.** The Phase 1-6 scripts remain
-   narrative experiments with plots and do not call `evaluation/`. Phases 8-12
-   are the exceptions: `phase8_demo.py`, `phase9_demo.py`, `phase10_demo.py`,
-   `phase11_demo.py` and `phase12_demo.py` share `simulate_*` with their
-   benchmark runners, so the plotted and scored runs cannot drift. A change to a
-   shared component should still run both, because the older harness runs will
-   not catch a plotting or
-   narrative regression.
+   narrative experiments with plots and do not call `evaluation/`. Phases 8-13
+   are the exceptions: `phase8_demo.py` through `phase13_demo.py` share
+   `simulate_*` with their benchmark runners, so the plotted and scored runs
+   cannot drift. A change to a shared component should still run both, because
+   the older harness runs will not catch a plotting or narrative regression.
 10. **LiDAR rays are infinitely thin.** Small obstacles can fall between rays;
     there is no beam width, intensity, multipath or mixed-pixel model.
 11. **LiDAR only handles axis-aligned rectangles** plus world walls, and noise
@@ -655,9 +705,10 @@ Repository workflow used so far:
     an offline pose graph with loop closure, but the live mapper still builds at
     the current filter estimate, so drift smears geometry until the back-end
     runs.
-22. **Mapping needs a prior.** `LogOddsMap` repairs an occupancy grid supplied by
-    the caller. It does not solve the "no map at all" problem and has no active
-    exploration policy; coverage is whatever navigation happens to observe.
+22. **Phase 10 mapping needs a prior.** `LogOddsMap` repairs an occupancy grid
+    supplied by the caller. Phase 13 supplies the missing exploration policy,
+    but it starts from an empty prior of a known extent: it discovers obstacles
+    inside that box, not the size of the world.
 23. **The inverse sensor model is fixed and uncalibrated.** Log-odds increments
     do not depend on range, incidence angle or beam width, and the map assumes a
     static world. Moving obstacles appear as smears rather than tracked objects.
@@ -694,6 +745,29 @@ Repository workflow used so far:
 32. **One loop, one route.** The `loop` benchmark is a regression target, not a
     broad SLAM evaluation; symmetric worlds, multiple loops and moving objects
     are untested. Phase 11 itself was measured (unlike Phase 10).
+33. **Exploration is greedy.** Phase 13 re-scores viewpoints after each arrival
+    but does not plan a tour over the remaining candidates, so it can travel
+    more than a coverage planner would. Repeated small back-and-forth moves
+    near the end of a run are a symptom.
+34. **The viewpoint lattice is coarse.** `spacing = 8` cells and
+    `min_gain = 40` cells leave small unknown pockets between lattice points.
+    The 95% map target is reached in the demo world; a cluttered or larger map
+    would need a finer lattice or a refinement pass.
+35. **Unknown-is-free planning can waste travel.** The optimistic planner may
+    choose a target behind a wall. Blacklisting recovers, but the robot can
+    drive to a doorway before discovering that the chosen cell is unreachable.
+36. **The map extent is fixed by the prior.** Exploration stops on the observed
+    fraction of the prior's grid. A world larger than the prior cannot be fully
+    counted; a smaller one inflates the apparent coverage with border cells.
+37. **Boundary walls inflate map error.** The simulator's LiDAR treats the world
+    edge as an obstacle, while the truth raster contains only inserted
+    rectangles. The map is right about the boundary, but the observed-surface
+    error counts it as a mismatch, so `map_error` is pessimistic here as in
+    Phase 10.
+38. **No dynamic obstacles or sensor dropout during exploration.** The run uses
+    the same idealised rays, independent Gaussian range noise and constant wheel
+    scale mismatch as the other phases. A moving obstacle would be mapped as a
+    static wall until it moved again.
 
 ---
 
@@ -1325,13 +1399,80 @@ benchmark or `phase10_demo.py` run has been performed.
 
 ---
 
-## 17. Working agreement
+## 17. Phase 13 — Next-best-view exploration (completed)
+
+**Outcome:** The robot now starts from an empty prior where every cell is
+unknown. A `Viewpoint` policy scores a coarse lattice by unknown area within
+LiDAR range divided by A* travel cost, drives to the best reachable target and
+re-scores after each arrival. Unknown cells are free to the planner and failed
+targets are blacklisted. On the `explore` scenario it reaches the 95% observed
+map target in `112 s`, covers `96.2%` of truly free space, visits `18.7`
+viewpoints, and finishes with zero collisions, `0.093 m` filter RMS and `322`
+cells of observed-surface map error.
+
+### Goal
+Close the documented Phase 10 gap: build a map without a prior and choose where
+to look, using only the robot's own map for the stopping decision.
+
+### Implemented scope
+1. `src/atlas/exploration/viewpoint.py` — `Viewpoint`, `unknown_area`,
+   `candidate_cells` and `select_viewpoint`; exports in
+   `src/atlas/exploration/__init__.py`.
+2. `Scenario.coverage_target` (default `0.95`, validated to `(0, 1]`) and
+   `empty_world()`; the `explore` scenario (`kind="exploration"`, `demo_world`
+   truth, empty prior, inflation `0.30`, `max_steps=2600`, target `0.95`).
+3. `exploration` in `KINDS` and the dispatcher.
+4. `ExplorationMetrics`, `ExplorationTrace`, `simulate_exploration` and
+   `run_exploration`; package exports.
+5. The run loop: integrate the scan, update the filter, record coverage, stop at
+   the target, recover from `navigator.failed` by blacklisting and re-selecting,
+   and retarget after each arrival.
+6. `tests/test_exploration.py` (9 tests) and `tests/test_evaluation.py` updates
+   for the new kind, scenario name and `coverage_target` validation.
+7. `scripts/phase13_demo.py` — 2 x 3 figure: blank prior, truth, final map with
+   path and viewpoints, observed/free-space coverage timelines, position and
+   heading error, and the time-coloured trajectory. Saves
+   `experiments/plots/phase13_exploration.png`.
+8. Docs: `docs/mathematics.md` section 22, the Phase 13 section of
+   `docs/design_decisions.md`, `README.md` and this handoff.
+
+### Acceptance (met)
+- Exploration starts from a map on which every cell is unknown.
+- Coverage reaches the scenario target and the run stops without reading truth.
+- Free-space coverage exceeds the map-coverage target (`96.2%` vs `95.0%`).
+- Zero collisions and zero failed runs in seeds 0-2.
+- At least one unreachable target is handled by blacklisting and replacement
+  (observed in the prototype and covered by the max-step test path in the
+  deterministic demo world).
+- The map remains usable: `322` cells of observed-surface error and `0.093 m`
+  filter RMS.
+- The 9 Phase 13 tests pass; the 56-test targeted run across Phases 11-13 files
+  plus `test_evaluation.py` passes. Phase 10 tests, benchmark and demo remain
+  unexecuted by design.
+
+### Deliberate simplifications
+- Greedy next-best-view, not a coverage tour.
+- Coarse lattice (`spacing=8`, `radius=40`, `min_gain=40` cells).
+- Unknown space is free to the planner; unreachable targets are blacklisted.
+- The map extent comes from the empty prior; the robot does not discover it.
+- Boundary walls and the idealised sensor model are unchanged from earlier
+  phases, so map error remains an observed-surface indicator and is pessimistic.
+
+### Verification status
+The Phase 13 tests, demo and three-seed benchmark were run during authoring and
+the measured table is in `docs/mathematics.md` section 22.7 and section 3 above.
+Phase 10's verification debt is unchanged: no full `pytest` run, Phase 10
+benchmark or `phase10_demo.py` run has been performed.
+
+---
+
+## 18. Working agreement
 
 Keep the existing conventions and do not change Phase 0-9 behaviour; the
 230-test Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top
 of that baseline, but the combined suite has not been executed yet. Phase 11
-adds 15 tests and Phase 12 adds 4 (247 test functions total); the 45 tests
-covering the Phase 11 and 12 files plus `test_evaluation.py` were run during
-authoring, the rest of the combined suite was not. Commit implementation first,
-docs and demo second. Push only when the user explicitly asks, and never present
-unverified Phase 10 numbers as measured results.
+adds 15 tests, Phase 12 adds 4 and Phase 13 adds 9 (256 test functions total);
+the 56 tests covering the Phase 11, 12 and 13 files plus `test_evaluation.py`
+were run during authoring, the rest of the combined suite was not. Commit
+implementation first, docs and demo second. Push only when the user explicitly
+asks, and never present unverified Phase 10 numbers as measured results.

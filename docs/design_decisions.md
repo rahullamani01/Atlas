@@ -508,3 +508,57 @@
 - **Verified.** The four Phase 12 tests, the touched evaluation tests and the
   three-seed benchmark were run during authoring; measured numbers are in
   `docs/mathematics.md` §21.7. Phase 10's verification debt is unchanged.
+
+## Next-best-view exploration (Phase 13)
+
+- **Unknown is a `known` mask, not a new map type.** `LogOddsMap(prior,
+  known=zeros)` already gives the right representation: log-odds hold no
+  opinion, `occupancy` is empty, and `observed` records what the beams touched.
+  A second "unknown map" class would duplicate the ray integration and make
+  Phase 10's repair tools unusable on the exploration map.
+- **A fixed viewpoint lattice, not frontier chasing.** A prototype that drove
+  to the nearest known/unknown boundary oscillated in doorways: the nearest
+  frontier flips sides as the robot turns, and a frontier behind a wall can be
+  reachable only after a long detour. A coarse lattice is stable, has no
+  feedback loop with the scan, and is cheap to re-score after every arrival.
+- **Gain is unknown area within LiDAR range, divided by A\* cost.** The score
+  `G / (1 + C)` rewards targets that reveal a lot for little travel. The unit
+  floor keeps a zero-cost target from dividing by zero, and the occupied start
+  cell is excluded explicitly so the robot does not "arrive" at step zero. A
+  pure travel-cost or pure-gain rule was easier to tune but produced worse
+  routes in the prototype.
+- **Unknown cells stay free for planning.** Treating unknown cells as blocked
+  sounds safer but stalls the robot at the edge of the observed region, which is
+  exactly where exploration has to go. The optimistic planner may choose a
+  target that later turns out to be blocked; that is handled by blacklisting,
+  not by refusing to move.
+- **Failures blacklist a neighbourhood, not a single cell.** A blocked doorway
+  invalidates several lattice points around it. Excluding candidates within one
+  spacing of a failed or visited target stops the runner from retrying the same
+  obstacle from a slightly different cell.
+- **Stopping uses `observed_ratio`, not true coverage.** The robot cannot know
+  the true free space, so a truth-based stop would leak the answer into the
+  controller. The prior supplies the map extent; the run stops when 95% of that
+  extent has been observed, or when no candidate above the gain threshold is
+  reachable. Ground truth is read afterwards only to score `free_coverage` and
+  map error.
+- **Greedy next-best-view, not a coverage tour.** Sequencing viewpoints would
+  reduce total travel, but it requires a global model of the remaining unknown
+  and replanning after every observation. Greedy is enough to show autonomous
+  coverage and leaves tour optimisation as a clearly scoped next step.
+- **Coarse parameters on purpose.** `spacing = 8` cells, `radius = 40` cells and
+  `min_gain = 40` cells were chosen in the prototype and left unchanged. A finer
+  lattice sees smaller pockets but costs more A\* calls; the measured runs reach
+  the target comfortably, so the simpler configuration is kept.
+- **Reuse the Phase 10 loop.** `MappingNavigator`, `PathFollower`, the particle
+  filter, tyre-scale mismatch and the log-odds map are the same components used
+  for mapping and SLAM. Phase 13 adds only the target-selection policy and the
+  runner; there is no second localiser, planner or controller to keep in sync.
+- **A separate `ExplorationMetrics` dataclass.** Coverage, viewpoints and
+  free-space coverage are unique to exploration. Extending `MappingMetrics`
+  would give every non-exploration run meaningless zero fields and blur what
+  each runner actually measures.
+- **Verified.** The nine Phase 13 tests and the touched evaluation tests pass,
+  and the demo and three-seed benchmark were run during authoring; measured
+  numbers are in `docs/mathematics.md` §22.7. Phase 10's verification debt is
+  unchanged.

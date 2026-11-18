@@ -2145,3 +2145,201 @@ re-accumulation of the pre-closure error.
    trigger are tuned to this route.
 6. **Map error is an observed-surface indicator.** As in Phase 10, the metric
    scores obstacle surfaces seen by the run, not global map accuracy.
+
+## 22. Next-best-view exploration (Phase 13)
+
+### 22.1 Why explore
+
+Every earlier mapping run assumes the robot already has a map: a prior with
+phantom obstacles and missing blocks in Phase 10, a correct loop prior in
+Phases 11-12. That assumption hides the hard part. If the map is empty and the
+world unknown, there is no goal to plan to, and planning through unknown space
+is not the same problem as planning through a known one.
+
+Phase 13 adds the missing policy. The robot starts from a prior in which every
+cell is unknown and repeatedly chooses where to drive so that its LiDAR reveals
+the most new area for the least travel. Mapping, localisation and navigation are
+the Phase 10 components; the new code is the choice of target.
+
+### 22.2 Representing an unknown world
+
+`LogOddsMap` normally starts from a prior grid and marks every cell known. An
+empty prior would still make every cell known-free, so an empty grid is not an
+unknown world. The constructor therefore accepts `known`:
+
+```text
+log_odds = 0 for cells with known = False
+known    = False for cells the robot has not observed
+observed = False until a beam carves or hits the cell
+```
+
+`occupancy` is `known & (log_odds > 0)`, so unknown cells are not obstacles.
+Two different counts are useful:
+
+```text
+observed_ratio = |observed| / |grid|          # what the robot has looked at
+known_ratio    = |known|    / |grid|          # what it has an opinion about
+```
+
+`observed_ratio` is the stopping signal because it grows monotonically with
+coverage; `known_ratio` reaches the same value with a small lag because a cell
+can be observed before its log-odds crosses the occupancy threshold.
+
+### 22.3 Scoring candidate viewpoints
+
+Candidates are lattice points, not frontiers. A frontier is a boundary between
+known and unknown, and a frontier-chasing prototype repeatedly oscillated in
+doorways: the nearest frontier flips sides as the robot turns, and a frontier
+behind an obstacle can be reachable only by a long detour. Scoring a fixed
+lattice avoids that feedback loop.
+
+The lattice is offset by half a spacing so it does not sit on the map border:
+
+```text
+spacing = 8 cells (2.0 m at 0.25 m/cell)
+candidate c = (col, row) on the lattice, free in the optimistic grid
+```
+
+For a candidate, the predicted gain is the number of unknown cells inside a
+disk of radius `rho = 40` cells (10 m, the LiDAR range):
+
+```text
+G(v) = sum_{c: ||c - v|| <= rho} [c is unknown]
+```
+
+The candidate is converted to the nearest free cell, low-gain candidates are
+dropped (`G < 40` cells), and A* on the current optimistic grid gives the travel
+cost `C(v)`. The score is gain per unit cost, with a unit floor so a zero-cost
+candidate does not divide by zero:
+
+```text
+score(v) = G(v) / (1 + C(v))
+```
+
+The highest score wins; ties keep the first candidate. The unit floor is why the
+cell the robot already occupies is excluded explicitly: with `C = 0` it would
+otherwise outrank every real target.
+
+The lattice is cheap on purpose. On an 80 x 80 grid there are 100 candidates, a
+disk count is a windowed array operation, and A* on the inflated grid is a few
+milliseconds. Re-scoring after every arrival is affordable, which matters
+because the map changes while the robot drives.
+
+### 22.4 Optimistic planning and failure recovery
+
+Unknown cells are free in `LogOddsMap.to_grid()`. That is deliberate: the robot
+must be willing to enter space it has not observed, or exploration cannot start.
+The cost is that a chosen target may turn out to be blocked. The runner handles
+that case rather than aborting:
+
+```text
+1. plan to the chosen cell on the optimistic grid
+2. if the navigator reports failure, blacklist that cell
+3. choose the next-best candidate
+4. if no candidate passes the gain threshold, stop
+```
+
+Blacklisting is by distance (`< spacing`), not exact cell, so neighbouring
+lattice points around a blocked doorway do not all get retried. Visited targets
+are excluded the same way. This is the exploration analogue of Phase 6's
+recovery supervisor: the policy is allowed to be wrong, but a wrong choice must
+not end the run.
+
+`MappingNavigator.goal_reached` stays true until `retarget()`, so arrival is
+handled before the next control step. The runner selects and plans the next
+viewpoint immediately; if planning fails, it blacklists and lets the navigator's
+normal replan path report the failure on the next step.
+
+### 22.5 A stopping rule without ground truth
+
+A coverage target cannot be checked against the true free space, because the
+robot does not know it. Phase 13 stops on the map-side quantity:
+
+```text
+observed_ratio >= coverage_target
+```
+
+The `explore` scenario uses `coverage_target = 0.95` of the bounded map. The
+bound is supplied by the empty prior: the operator knows the site extent even
+when it knows nothing about the obstacles inside it. If no candidate above the
+gain threshold remains, the run also stops; that is the "nothing useful left to
+see" case.
+
+Ground truth is read only after the loop to score two quantities:
+
+```text
+free_coverage = |observed and truly free| / |truly free|
+map_error     = observed-surface error between map and truth
+```
+
+The distinction matters for interpretation: `coverage` is what ends the run,
+`free_coverage` is what the run achieved. In the measured runs the two differ by
+about one percentage point, because most of the final observed cells are walls
+rather than free space.
+
+### 22.6 Metrics
+
+```text
+completed          observed_ratio reached coverage_target
+failed             a collision, or more navigator failures than the limit
+collisions         simulator collision count
+duration           executed control steps * dt [s]
+coverage           observed_ratio at the end (truth-free)
+free_coverage      fraction of truly free cells observed (scoring)
+map_error          observed-surface map error vs truth [cells]
+viewpoints         number of planned targets
+steps              executed control steps
+filter_rms         live particle-filter position error [m]
+filter_heading_rms_deg live particle-filter heading error [deg]
+```
+
+### 22.7 Measured results
+
+Phase 13 benchmark, `explore` scenario, seeds 0-2 (default 300 particles,
+40 beams; each run finishes in ~17 s):
+
+| Metric | Mean | Std |
+|---|---:|---:|
+| completed / failed / collisions | 1.0 / 0 / 0 | 0 / 0 / 0 |
+| duration [s] | 112.27 | 0.38 |
+| map coverage | 95.01% | 0.02% |
+| free-space coverage | 96.18% | 0.12% |
+| map error [cells] | 321.7 | 9.6 |
+| viewpoints | 18.7 | 0.6 |
+| steps | 2245.3 | 7.6 |
+| filter RMS [m] | 0.0932 | 0.0007 |
+| filter heading RMS [deg] | 1.13 | 0.06 |
+
+The seed-0 demo reports the same run at `2242` steps: `95.0%` observed,
+`96.1%` free-space coverage, `19` viewpoints, `320` cells of map error and
+`0.093 m` filter RMS. Deterministic fields repeat exactly for a seed; only
+wall-clock timings vary.
+
+The result is not that the robot found the shortest possible tour. It is that it
+covered more than 96% of the free space with zero collisions and no prior, using
+only its own map to decide when to stop.
+
+### 22.8 Limitations
+
+1. **Lattice resolution is a hard cap.** With 2 m spacing and a 10 m gain
+   radius, small pockets of unknown space between lattice points can be missed.
+   The 95% target is reached here; a cluttered world would need a finer lattice
+   or a second refinement pass.
+2. **Optimistic planning is not safe planning.** Unknown space is assumed free,
+   so a target can turn out to be behind a wall. Blacklisting recovers, but the
+   robot may waste travel. A conservative version stalls at doorways; this is
+   the same trade-off as Phase 10's map-following planner.
+3. **No global tour.** The policy is greedy: it picks the best next viewpoint
+   and does not sequence the remaining viewpoints to minimise total travel.
+   Revisiting a region can therefore cost more than a planned coverage tour.
+4. **Fixed map extent.** The stopping rule counts cells in the prior's bounding
+   box. An operator must supply an empty map of the right size; a world larger
+   than the prior cannot be fully counted, and a smaller one incurs border
+   observations that are not free space.
+5. **Boundary effects.** The simulator's LiDAR treats the world edge as a wall,
+   while the truth raster contains only inserted obstacles. The map learns the
+   boundary correctly but `map_error` counts it as a mismatch, so the absolute
+   map-error number is pessimistic here as in Phase 10.
+6. **One map, one sensor model.** The run uses the same idealised 2D LiDAR and
+   wheel-scale mismatch as the earlier phases. No dynamic obstacles, no
+   occlusion beyond straight-line rays, and no sensor dropout are modelled.
