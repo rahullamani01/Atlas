@@ -9,6 +9,7 @@ from atlas.mapping import (
     LogOddsMap,
     MappingNavigator,
     map_error,
+    repair_fraction,
     route_length,
     surface_cells,
 )
@@ -82,6 +83,30 @@ def test_endpoint_hits_add_a_missing_obstacle():
     assert mapping.log_odds[0, 3] > 0.0
 
 
+def test_endpoint_on_a_face_enters_the_obstacle_cell():
+    # A ray travelling in -x that stops exactly on the obstacle's right face
+    # must mark the cell inside the obstacle, not the free cell beyond it.
+    mapping = LogOddsMap(OccupancyGrid(16, 4, resolution=0.5))
+    scan = _beam((7.0, 0.75), math.pi, 1.5)
+
+    mapping.integrate(scan, Pose(7.0, 0.75, 0.0))
+
+    assert mapping.occupancy[1, 10]      # x in [5.0, 5.5)
+    assert not mapping.occupancy[1, 11]  # x in [5.5, 6.0)
+
+
+def test_world_boundary_hits_are_clamped_into_the_grid():
+    # The endpoint sits exactly on (and, after the epsilon nudge, just past)
+    # the world edge, so it must be clamped to the last in-bounds cell.
+    mapping = LogOddsMap(OccupancyGrid(4, 4, resolution=1.0))
+    scan = _beam((0.5, 3.5), math.pi / 2.0, 0.5)
+
+    mapping.integrate(scan, Pose(0.5, 3.5, 0.0))
+
+    assert mapping.occupancy[3, 0]
+    assert mapping.observed[3, 0]
+
+
 def test_surface_cells_returns_the_boundary_not_the_interior():
     blocked = np.zeros((5, 5), dtype=bool)
     blocked[1:4, 1:4] = True
@@ -106,6 +131,26 @@ def test_map_error_compares_surfaces_and_honours_the_mask():
     mask[1, 1] = True
     assert map_error(empty, truth, mask) == 1
     assert map_error(truth, truth, mask) == 0
+
+
+def test_repair_fraction_ignores_new_sampling_error():
+    truth = np.zeros((7, 7), dtype=bool)
+    truth[1:4, 1:4] = True
+
+    prior = truth.copy()
+    prior[1, 1] = False   # prior misses a truth surface cell
+    prior[5, 5] = True    # prior has a phantom obstacle
+
+    predicted = truth.copy()
+    predicted[0, 5] = True  # a new disagreement the prior never had
+
+    prior_errors, repaired = repair_fraction(predicted, prior, truth)
+
+    assert prior_errors == 2
+    assert repaired == 2
+    # The new error still inflates the net count, which is why repair and
+    # net map error are reported separately.
+    assert map_error(predicted, truth) == 1
 
 
 @pytest.mark.parametrize(

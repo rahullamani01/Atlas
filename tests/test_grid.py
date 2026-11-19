@@ -52,6 +52,27 @@ def test_from_world_rounds_up_partial_cells():
     assert (grid.width, grid.height) == (5, 3)
 
 
+def test_from_world_can_rasterise_the_world_boundary_as_walls():
+    world = World(4, 4, [RectObstacle(1, 1, 2, 2)])
+    interior = OccupancyGrid.from_world(world, resolution=1.0)
+    ringed = OccupancyGrid.from_world(world, resolution=1.0, boundary=True)
+
+    # Off by default: the world edge is not an obstacle for planning.
+    assert not interior.blocked[0, :].any()
+    assert not interior.blocked[:, -1].any()
+
+    # On demand: every outer cell is blocked, matching the simulator's LiDAR
+    # and the arena the robot actually drives in.
+    assert ringed.blocked[0, :].all()
+    assert ringed.blocked[-1, :].all()
+    assert ringed.blocked[:, 0].all()
+    assert ringed.blocked[:, -1].all()
+    assert not ringed.is_free((3, 3))
+    assert np.array_equal(
+        ringed.blocked[1:-1, 1:-1], interior.blocked[1:-1, 1:-1]
+    )
+
+
 def test_inflation_grows_every_blocked_cell():
     grid = OccupancyGrid(7, 7, resolution=1.0)
     grid.set_blocked((3, 3))

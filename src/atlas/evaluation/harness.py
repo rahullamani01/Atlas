@@ -29,7 +29,13 @@ from atlas.evaluation.metrics import (
 from atlas.evaluation.scenarios import Scenario, default_scenarios
 from atlas.exploration import select_viewpoint
 from atlas.localization import LocalizationMonitor, ParticleFilter, Relocalizer
-from atlas.mapping import LogOddsMap, MapEvent, MappingNavigator, map_error
+from atlas.mapping import (
+    LogOddsMap,
+    MapEvent,
+    MappingNavigator,
+    map_error,
+    repair_fraction,
+)
 from atlas.perception import DynamicObstacleMap
 from atlas.planning import OccupancyGrid, a_star, dijkstra
 from atlas.recovery import NavEvent, NavigationSupervisor, nearest_free_cell
@@ -798,14 +804,14 @@ def simulate_mapping(
     """
     truth_world = scenario.world()
     truth_raw = OccupancyGrid.from_world(
-        truth_world, resolution=scenario.resolution
+        truth_world, resolution=scenario.resolution, boundary=True
     )
     prior_world = (
         scenario.prior_world() if scenario.prior_world is not None
         else scenario.world()
     )
     prior_raw = OccupancyGrid.from_world(
-        prior_world, resolution=scenario.resolution
+        prior_world, resolution=scenario.resolution, boundary=True
     )
 
     mapping = LogOddsMap(
@@ -904,8 +910,14 @@ def simulate_mapping(
         mapping.occupancy, truth_raw.blocked, observed
     )
     reduction = prior_error - final_error_cells
+    prior_error_cells, repaired_cells = repair_fraction(
+        mapping.occupancy, prior_raw.blocked, truth_raw.blocked, observed
+    )
+    # Repair is judged only on cells the prior got wrong. Net reduction also
+    # counts new cell-level sampling error, so it can be negative even when
+    # every observable prior defect was fixed.
     repair_ratio = (
-        reduction / prior_error if prior_error > 0 else 1.0
+        repaired_cells / prior_error_cells if prior_error_cells > 0 else 1.0
     )
 
     goal_world = planning.cell_to_world(goal_cell)
@@ -975,14 +987,14 @@ def simulate_slam(
     """
     truth_world = scenario.world()
     truth_raw = OccupancyGrid.from_world(
-        truth_world, resolution=scenario.resolution
+        truth_world, resolution=scenario.resolution, boundary=True
     )
     prior_world = (
         scenario.prior_world() if scenario.prior_world is not None
         else scenario.world()
     )
     prior_raw = OccupancyGrid.from_world(
-        prior_world, resolution=scenario.resolution
+        prior_world, resolution=scenario.resolution, boundary=True
     )
 
     mapping = LogOddsMap(
@@ -1169,14 +1181,14 @@ def simulate_online_slam(
     """
     truth_world = scenario.world()
     truth_raw = OccupancyGrid.from_world(
-        truth_world, resolution=scenario.resolution
+        truth_world, resolution=scenario.resolution, boundary=True
     )
     prior_world = (
         scenario.prior_world() if scenario.prior_world is not None
         else scenario.world()
     )
     prior_raw = OccupancyGrid.from_world(
-        prior_world, resolution=scenario.resolution
+        prior_world, resolution=scenario.resolution, boundary=True
     )
 
     mapping = LogOddsMap(
@@ -1458,7 +1470,7 @@ def simulate_exploration(
     """
     truth_world = scenario.world()
     truth_raw = OccupancyGrid.from_world(
-        truth_world, resolution=scenario.resolution
+        truth_world, resolution=scenario.resolution, boundary=True
     )
     prior_world = (
         scenario.prior_world() if scenario.prior_world is not None

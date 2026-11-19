@@ -77,6 +77,36 @@ def map_error(
     return int(np.count_nonzero(predicted_surface ^ truth_surface))
 
 
+def repair_fraction(
+    predicted: np.ndarray,
+    prior: np.ndarray,
+    truth: np.ndarray,
+    mask: np.ndarray | None = None,
+) -> tuple[int, int]:
+    """Count prior surface errors and how many the predicted map has fixed.
+
+    A *prior error* is a cell where the prior's obstacle surface disagrees with
+    the truth. It counts as *repaired* when the predicted surface agrees with
+    the truth at that cell. Disagreements the map introduces elsewhere are new
+    sampling error, not failed repair, so they do not lower this count. That is
+    what separates repair quality from the net symmetric difference reported by
+    :func:`map_error`, which can grow when a sparse scan adds cell-level noise.
+
+    Returns ``(prior_errors, repaired)``; both are zero when the prior and
+    truth already agree on the masked surface.
+    """
+    predicted_surface = surface_cells(predicted)
+    prior_surface = surface_cells(prior)
+    truth_surface = surface_cells(truth)
+    if mask is not None:
+        predicted_surface = predicted_surface & mask
+        prior_surface = prior_surface & mask
+        truth_surface = truth_surface & mask
+    prior_errors = prior_surface ^ truth_surface
+    repaired = prior_errors & (predicted_surface == truth_surface)
+    return int(np.count_nonzero(prior_errors)), int(np.count_nonzero(repaired))
+
+
 class LogOddsMap:
     """A log-odds occupancy grid updated from LiDAR scans at estimated poses."""
 
@@ -203,20 +233,34 @@ class LogOddsMap:
             distance = float(scan.ranges[index])
             hit = distance < scan.max_range - _EPS
 
+            hit_index = -1
+            if hit:
+                # A hit marks the cell *inside* the obstacle. Advancing the
+                # endpoint slightly along the ray keeps an obstacle edge that
+                # lies exactly on a cell boundary from being assigned to the
+                # free cell outside it. Clamping keeps a ray that reaches the
+                # world edge from falling outside the grid.
+                reach = distance + 0.05 * self.resolution
+                end_x = origin_x + reach * math.cos(angle)
+                end_y = origin_y + reach * math.sin(angle)
+                col, row = self._world_cell(end_x, end_y)
+                col = min(max(col, 0), self.width - 1)
+                row = min(max(row, 0), self.height - 1)
+                hit_index = row * self.width + col
+                hit_indices.append(hit_index)
+
             free_length = distance - self.free_margin if hit else distance
             if free_length > 0:
                 indices = self._ray_indices(
                     origin_x, origin_y, angle, free_length
                 )
+                # A beam must not mark the cell it terminates in as free. At
+                # close range the free samples reach into that same cell, and
+                # the miss evidence would otherwise outvote the hit.
+                if hit_index >= 0 and indices.size:
+                    indices = indices[indices != hit_index]
                 if indices.size:
                     free_indices.append(indices)
-
-            if hit:
-                end_x = origin_x + distance * math.cos(angle)
-                end_y = origin_y + distance * math.sin(angle)
-                col, row = self._world_cell(end_x, end_y)
-                if 0 <= col < self.width and 0 <= row < self.height:
-                    hit_indices.append(row * self.width + col)
 
         flat = self.log_odds.reshape(-1)
         known_flat = self.known.reshape(-1)

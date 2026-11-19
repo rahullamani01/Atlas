@@ -114,12 +114,19 @@ class OccupancyGrid:
         resolution: float = 1.0,
         inflate_radius: float = 0.0,
         origin: tuple[float, float] = (0.0, 0.0),
+        *,
+        boundary: bool = False,
     ) -> "OccupancyGrid":
         """Rasterise a `World` and optionally inflate obstacles.
 
         A cell is blocked when its centre lies inside a rectangular obstacle.
-        `inflate_radius` then grows every obstacle by that radius, which is how
+        ``inflate_radius`` then grows every obstacle by that radius, which is how
         robot body size is accounted for during planning.
+
+        ``boundary`` marks the outermost cell ring as blocked. The simulator
+        and the LiDAR treat the world edge as a wall, so a grid used as ground
+        truth or as a prior for map scoring must include it. It is off by
+        default so planning-only worlds keep their previous extent.
         """
         width = math.ceil(world.width / resolution)
         height = math.ceil(world.height / resolution)
@@ -134,6 +141,12 @@ class OccupancyGrid:
                     o.xmin <= x <= o.xmax and o.ymin <= y <= o.ymax
                     for o in world.obstacles
                 )
+
+        if boundary:
+            blocked[0, :] = True
+            blocked[-1, :] = True
+            blocked[:, 0] = True
+            blocked[:, -1] = True
 
         grid = cls(width, height, resolution, origin, blocked)
         return grid.inflated(inflate_radius) if inflate_radius > 0 else grid

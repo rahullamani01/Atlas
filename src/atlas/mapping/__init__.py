@@ -4,6 +4,7 @@ from atlas.mapping.occupancy_map import (
     LogOddsMap,
     MapUpdate,
     map_error,
+    repair_fraction,
     surface_cells,
 )
 
@@ -13,6 +14,7 @@ __all__ = [
     "MapUpdate",
     "MappingNavigator",
     "map_error",
+    "repair_fraction",
     "route_length",
     "surface_cells",
 ]
