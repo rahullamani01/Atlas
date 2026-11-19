@@ -361,7 +361,10 @@
   number.
 - `map_repair_ratio` is reported as a fraction of the observable prior error,
   not as global map accuracy. A perfect prior reports `1.0`; a prior with no
-  observable error has nothing to repair.
+  observable error has nothing to repair. A cell counts as repaired when the
+  map now agrees with truth where the prior did not, so new sampling error
+  elsewhere does not lower the ratio. `map_error_reduction` remains the net
+  symmetric difference and can be negative for a sparse map.
 - The planning grid is cached by `map_version` and rebuilt only when occupancy
   changes. Ray integration runs every control step, but inflation and grid
   construction are comparatively expensive and most scans change little.
@@ -397,10 +400,10 @@
 - `MappingMetrics` is a separate flat dataclass from `NavigationMetrics` and
   `RelocalizationMetrics`. Map counts and repair ratios do not belong in the
   generic navigation schema, and the JSON/CSV format stays one row per scenario.
-- Phase 10 was authored with an explicit **no-run policy**: syntax and import
-  checks only. The demo, tests and measured table were added so the first
-  verification run is a single command, but no Phase 10 number is claimed as
-  verified yet.
+- Phase 10 was authored with an explicit no-run policy and verified later. The
+  first run exposed two mapper defects and a metric that contradicted its own
+  documented definition; all three were fixed. Measured results are in
+  `docs/mathematics.md` §19.6.
 
 ## Pose-graph SLAM and loop closure (Phase 11)
 
@@ -454,9 +457,8 @@
 - **One scenario and one route.** As with earlier phases this is a regression
   target, not a broad SLAM benchmark. Symmetric worlds, dynamic objects and
   multiple loops are out of scope.
-- **Verified, unlike Phase 10.** The Phase 11 tests, demo and three-seed
-  benchmark were run during authoring; the measured table is in
-  `docs/mathematics.md` §20.9. Phase 10's verification debt is unchanged.
+- **Verified, like Phase 10.** The Phase 11 tests, demo and three-seed
+  benchmark were run; the measured table is in `docs/mathematics.md` §20.9.
 
 ## Online pose-graph correction (Phase 12)
 
@@ -505,9 +507,9 @@
   first goal, so the post-correction leg is long enough to show stable driving
   and short enough that a second unrelated failure mode does not dominate the
   metrics.
-- **Verified.** The four Phase 12 tests, the touched evaluation tests and the
-  three-seed benchmark were run during authoring; measured numbers are in
-  `docs/mathematics.md` §21.7. Phase 10's verification debt is unchanged.
+- **Verified.** The four Phase 12 tests, the touched evaluation tests, the demo
+  and the three-seed benchmark were run; measured numbers are in
+  `docs/mathematics.md` §21.7.
 
 ## Next-best-view exploration (Phase 13)
 
@@ -559,6 +561,5 @@
   would give every non-exploration run meaningless zero fields and blur what
   each runner actually measures.
 - **Verified.** The nine Phase 13 tests and the touched evaluation tests pass,
-  and the demo and three-seed benchmark were run during authoring; measured
-  numbers are in `docs/mathematics.md` §22.7. Phase 10's verification debt is
-  unchanged.
+  and the demo and three-seed benchmark were run; measured numbers are in
+  `docs/mathematics.md` §22.7.

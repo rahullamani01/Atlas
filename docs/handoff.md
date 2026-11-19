@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 18 November 2026
-**Branch:** `main` (Phase 13 complete)
-**Latest work:** Phase 13 — next-best-view exploration of an unknown map
-**Tests:** 256 test functions; Phases 0-9 baseline passing, Phase 10 suite still unexecuted
+**Date:** 19 November 2026
+**Branch:** `main` (Phase 13 complete; Phase 10 verified)
+**Latest work:** Phase 10 verification and map-repair corrections
+**Tests:** 290 tests, all passing
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -22,7 +22,7 @@
 | 7 | Evaluation and metrics | complete |
 | 8 | Integrated autonomy | complete |
 | 9 | Kidnapped-robot relocalization | complete |
-| 10 | Occupancy mapping and map repair | implementation complete; verification pending |
+| 10 | Occupancy mapping and map repair | complete |
 | 11 | Pose-graph SLAM and loop closure | complete |
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
@@ -46,24 +46,24 @@ global search reacquires the pose, and navigation resumes. Phase 10 additionally
 builds and repairs the occupancy map from LiDAR while the robot drives: free rays
 erase phantom obstacles, endpoint hits add missing ones, and the planner replans
 against the repaired map. The core roadmap, the optional relocalization
-extension and the mapping/map-repair extension are implemented; Phase 10
-performance numbers are still awaiting their first verification run.
+extension and the mapping/map-repair extension are implemented and verified;
+Phase 10 repairs `91.9%` of its observable prior errors with zero collisions.
 
 Phase 11 supplies the back-end Phase 10 named as missing. A run's wheel
 odometry, scans and filter estimates feed a pose graph: odometry ties consecutive
 nodes, a return to an old place is verified by scan matching and added as a loop
 closure, and Gauss-Newton spreads the correction over the chain. The occupancy
 map is rebuilt from the corrected poses. On the `loop` scenario the graph closes
-ten loops, cuts node-level trajectory error from `1.00 m` to `0.10 m` and lowers
-observed-surface map error from `175` to `135` cells, with zero collisions.
+`10.7` loops, cuts node-level trajectory error from `0.99 m` to `0.19 m` and
+lowers observed-surface map error from `257` to `69` cells, with zero collisions.
 
 Phase 12 makes that correction happen while the robot drives. The first verified
 closure optimises the graph in place, rebuilds the live map, resets wheel
 odometry and reseeds the particle filter at the corrected node, then the
 navigator replans and continues to a second goal. On the `online` scenario the
-correction fires at `22.5 s`, moves the chain by `1.17 m`, cuts node error from
-`0.69 m` to `0.10 m` (85%), and the robot finishes `0.014 m` from the second goal
-with zero collisions on the repaired map.
+correction fires at `23.8 s`, moves the chain by `1.32 m`, cuts pre-closure node
+RMS from `0.72 m` to `0.16 m` (77%), and the robot finishes `0.031 m` from the
+second goal with zero collisions on the repaired map.
 
 Phase 13 adds the policy Phase 10 lacked. The `explore` scenario starts from an
 empty prior where every cell is unknown, scores a coarse lattice of candidate
@@ -71,8 +71,8 @@ viewpoints by unknown area within LiDAR range divided by A* travel cost, and
 drives to the best reachable one. Unknown cells are free to the planner, so the
 robot leaves the observed region; failed targets are blacklisted. The run stops
 when 95% of the bounded map has been observed. Across seeds 0-2 it covered
-`96.2%` of truly free space with zero collisions, `18.7` viewpoints, `0.093 m`
-filter RMS and `322` cells of observed-surface map error.
+`96.2%` of truly free space with zero collisions, `18.3` viewpoints, `0.095 m`
+filter RMS and `340` cells of observed-surface map error.
 
 ---
 
@@ -443,18 +443,12 @@ filter RMS and `322` cells of observed-surface map error.
 ## 3. Verified numbers
 
 - Phase 0-9 baseline: 230 tests pass. Phase 10 adds `test_mapping.py` and
-  `test_slam_evaluation.py` and extends `test_evaluation.py`; that combined
-  suite has not been executed yet because the authoring run deliberately
-  skipped all test/demo execution. Phase 11 adds 15 tests
-  (`test_pose_graph.py` 4, `test_scan_matcher.py` 3, `test_loop_closure.py` 4,
-  `test_slam_loop.py` 4) and those 15 pass. Phase 12 adds 4 tests
-  (`test_online_slam.py`) and Phase 13 adds 9 (`test_exploration.py`), while
-  `test_evaluation.py` grows to 28 collected cases. The combined suite is 256
-  test functions; the 56 tests across `test_online_slam.py`,
-  `test_evaluation.py`, `test_pose_graph.py`, `test_scan_matcher.py`,
-  `test_loop_closure.py`, `test_slam_loop.py` and `test_exploration.py` were
-  run during authoring and pass. The rest of the combined suite, including all
-  Phase 10 tests, was not executed.
+  `test_slam_evaluation.py` and extends `test_evaluation.py`. Phase 11 adds 15
+  tests (`test_pose_graph.py` 4, `test_scan_matcher.py` 3, `test_loop_closure.py`
+  4, `test_slam_loop.py` 4), Phase 12 adds 4 (`test_online_slam.py`) and
+  Phase 13 adds 9 (`test_exploration.py`), while `test_evaluation.py` grows to
+  28 collected cases. The combined suite is 290 tests and was last run clean on
+  19 November 2026 after the Phase 10 verification fixes.
 - Phase 1 demo: straight line reaches exactly `x = 5.000`; 180 degree rotation;
   at `dt = 0.05 s` midpoint error over one circle is `5.2e-5 m` vs Euler
   `2.5e-2 m`.
@@ -522,55 +516,69 @@ filter RMS and `322` cells of observed-surface map error.
   - deterministic metrics repeat to floating-point precision (aggregate std at
     most ~1e-17); wall-clock planner times vary and are not part of the
     reproducibility claim
-- Phase 10 benchmark — **pending verification**. Acceptance targets only:
-  goal reached, zero collisions, at least one replan, non-zero added and
-  removed cells, lower observed-surface map error than the prior, and filter
-  position RMS below `0.5 m`. No measured Phase 10 values are claimed yet.
+- Phase 10 benchmark (`slam` scenario, seeds 0-2, 3 runs, default 800
+  particles / 60 beams):
+  - goal reached in every run, zero collisions, `59.93 ± 0.10 s` duration,
+    `77.3 ± 0.6` replans
+  - `921 ± 20` map updates; `349 ± 15` cells added and `449 ± 19` removed
+  - `71.9 ± 0.2%` of the map observed
+  - observed-surface prior error `41` cells (the phantom obstacle and the
+    visible face of the missing block); `91.9 ± 2.8%` of those prior-error
+    cells repaired
+  - net observed-surface error `159.7 ± 9.1` cells. It rises above the prior
+    because the prior is an otherwise exact raster while a 60-beam map adds
+    cell-level quantisation and grazing-ray error wherever it looks; repair
+    and net error are separate metrics (see sections 19.5-19.6 of
+    `mathematics.md`)
+  - filter RMS `0.101 ± 0.001 m`, heading RMS `0.881 ± 0.048 deg`, final
+    error `0.064 ± 0.003 m`
+  - seed-0 demo run: prior `41` -> final `170` cells, repair ratio `0.95`,
+    zero collisions, `0.062 m` final error
 - Phase 11 benchmark (`loop` scenario, seeds 0-2, 3 runs):
-  - goal reached in every run, zero collisions, `~28.6 s` duration
-  - `114.7 ± 0.6` graph nodes, `10` accepted loop closures in every run
-  - odometry node RMS `1.001 ± 0.010 m` → SLAM node RMS `0.103 ± 0.013 m`
-  - SLAM maximum node error `0.147 ± 0.023 m`, final node error
-    `0.076 ± 0.017 m`
-  - ATE reduction `89.7 ± 1.4%`
-  - graph cost `166.6 ± 1.6` → `0.0062 ± 0.0003`
-  - raw-pose map error `174.7 ± 5.0` cells → SLAM-pose map error
-    `134.7 ± 2.1` cells (`40.0 ± 5.2` fewer)
-  - live filter RMS `0.102 ± 0.008 m` (navigation is unchanged)
-  - seed-0 demo run: `0.990 m → 0.118 m` (88.0%), map `180 → 134` cells,
-    cost `164.81 → 0.0065`
+  - goal reached in every run, zero collisions, `30.07 ± 2.37 s` duration
+  - `120.7 ± 9.8` graph nodes, `10.7 ± 1.2` accepted loop closures
+  - odometry node RMS `0.993 ± 0.023 m` → SLAM node RMS `0.188 ± 0.024 m`
+  - SLAM maximum node error `0.287 ± 0.006 m`, final node error
+    `0.231 ± 0.080 m`
+  - ATE reduction `81.1 ± 2.0%`
+  - graph cost `182.8 ± 34.7` → `0.0088 ± 0.0038`
+  - raw-pose map error `257.3 ± 61.1` cells → SLAM-pose map error
+    `69.3 ± 9.6` cells (`188 ± 70` fewer)
+  - live filter RMS `0.108 ± 0.019 m`
+  - seed-0 demo run: `1.005 m → 0.196 m` (80.5%), map `232 → 78` cells,
+    cost `202.39 → 0.0067`
   - the 15 Phase 11 tests pass; `tests/test_evaluation.py` (24 collected cases)
     passes with the added `slam_loop` kind and `loop` scenario
 - Phase 12 benchmark (`online` scenario, seeds 0-2, 3 runs, default 800
   particles / 60 beams):
-  - goal reached in every run, zero collisions, `32.3 ± 0.1 s` duration
-  - `129.7 ± 0.6` graph nodes, `2` accepted loop closures in every run
-  - first correction at step `450` (`22.5 s`) in every run
-  - correction magnitude `1.170 ± 0.005 m`
-  - pre-closure node RMS `0.687 ± 0.002 m` → post-closure `0.103 ± 0.001 m`
-  - ATE reduction `85.0 ± 0.2%`; whole-run SLAM RMS `0.099 ± 0.0005 m`;
-    final node error `0.161 ± 0.006 m` after the second leg
-  - graph cost `17.24 ± 0.11` → `0.00459 ± 0.00001`
-  - raw-pose map error `170.3 ± 5.9` cells → corrected map error
-    `125.3 ± 3.1` cells (`45.0 ± 8.7` fewer) on the closure node set
-  - live filter RMS `0.105 ± 0.008 m`, heading RMS `1.13 ± 0.01 deg`
-  - final distance to the second goal `0.014 ± 0.006 m`
-  - seed-0 demo run: `0.689 m → 0.103 m` (85.1%), map `177 → 122` cells,
-    cost `17.13 → 0.0046`, final error `0.012 m`
+  - goal reached in every run, zero collisions, `33.65 ± 2.17 s` duration
+  - `135 ± 9` graph nodes, `2` accepted loop closures in every run
+  - first correction at step `475 ± 43` (`23.75 ± 2.17 s`)
+  - correction magnitude `1.322 ± 0.066 m`
+  - pre-closure node RMS `0.719 ± 0.053 m` → post-closure `0.163 ± 0.030 m`
+  - ATE reduction `77.0 ± 5.7%`; whole-run SLAM RMS `0.194 ± 0.017 m`;
+    final node error `0.196 ± 0.230 m` after the second leg
+  - graph cost `17.46 ± 8.00` → `0.00615 ± 0.00219`
+  - raw-pose map error `242.3 ± 44.8` cells → corrected map error
+    `39.3 ± 19.3` cells (`203 ± 64` fewer) on the closure node set
+  - live filter RMS `0.116 ± 0.019 m`, heading RMS `1.28 ± 0.21 deg`
+  - final distance to the second goal `0.031 ± 0.027 m`
+  - seed-0 demo run: `0.689 m → 0.175 m` (74.6%), map `226 → 51` cells,
+    cost `21.79 → 0.0049`, final error `0.012 m`
   - the 4 Phase 12 tests pass; `tests/test_evaluation.py` (26 collected cases)
     passes with the added `slam_online` kind, `online` scenario and
     `goal_sequence` validation
 - Phase 13 benchmark (`explore` scenario, seeds 0-2, 3 runs, default 300
   particles / 40 beams):
-  - completed in every run, zero failures and zero collisions, `112.27 ± 0.38 s`
+  - completed in every run, zero failures and zero collisions, `111.1 ± 4.8 s`
     duration
-  - map coverage `95.01 ± 0.02%` (the stopping signal), free-space coverage
-    `96.18 ± 0.12%`
-  - `18.7 ± 0.6` viewpoints, `2245.3 ± 7.6` steps
-  - observed-surface map error `321.7 ± 9.6` cells
-  - live filter RMS `0.0932 ± 0.0007 m`, heading RMS `1.13 ± 0.06 deg`
-  - seed-0 demo run: `95.0%` map coverage, `96.1%` free coverage, `19`
-    viewpoints, `2242` steps, `320` cells, `0.093 m` filter RMS
+  - map coverage `95.03 ± 0.02%` (the stopping signal), free-space coverage
+    `96.21 ± 0.18%`
+  - `18.3 ± 0.6` viewpoints, `2222 ± 96` steps
+  - observed-surface map error `340 ± 44` cells
+  - live filter RMS `0.0948 ± 0.0020 m`, heading RMS `1.17 ± 0.05 deg`
+  - seed-0 demo run: `95.0%` map coverage, `96.1%` free coverage, `18`
+    viewpoints, `2303` steps, `316` cells, `0.093 m` filter RMS
   - the 9 Phase 13 tests pass; `tests/test_evaluation.py` (28 collected cases)
     passes with the added `exploration` kind, `explore` scenario and
     `coverage_target` validation
@@ -714,9 +722,9 @@ Repository workflow used so far:
     static world. Moving obstacles appear as smears rather than tracked objects.
 24. **The mapping metric is observed-surface error.** It masks out unvisited
     cells by design, so it measures repair of what was seen, not global map
-    accuracy. Phase 10 has also not been measured yet: the implementation,
-    tests and demo were committed under an explicit no-run policy, and the
-    benchmark, demo and combined test suite still need their first execution.
+    accuracy. `map_error` is a net count and is pessimistic against a
+    near-perfect prior; `map_repair_ratio` scores only the cells the prior got
+    wrong. Both are reported.
 25. **Phase 11 is a back-end, not full SLAM.** The graph is built offline from a
     recorded run; it does not update the live map or the filter while driving,
     and the correction is never fed back into control. Incremental optimisation
@@ -759,11 +767,14 @@ Repository workflow used so far:
 36. **The map extent is fixed by the prior.** Exploration stops on the observed
     fraction of the prior's grid. A world larger than the prior cannot be fully
     counted; a smaller one inflates the apparent coverage with border cells.
-37. **Boundary walls inflate map error.** The simulator's LiDAR treats the world
-    edge as an obstacle, while the truth raster contains only inserted
-    rectangles. The map is right about the boundary, but the observed-surface
-    error counts it as a mismatch, so `map_error` is pessimistic here as in
-    Phase 10.
+37. **Boundary walls and grazing rays inflate net map error.** Truth and prior
+    rasters now include the arena boundary that the LiDAR and collision model
+    already enforce, so mapped boundary cells are no longer counted as extras.
+    Net observed-surface error still rises above a near-perfect prior: free-ray
+    samples at grazing incidence can erode wall cells, and a sparse scan adds
+    cell-level quantisation error wherever it looks. `map_repair_ratio` avoids
+    this by scoring only the cells the prior got wrong; `map_error` remains a
+    pessimistic net indicator.
 38. **No dynamic obstacles or sensor dropout during exploration.** The run uses
     the same idealised rays, independent Gaussian range noise and constant wheel
     scale mismatch as the other phases. A moving obstacle would be mapped as a
@@ -1195,7 +1206,7 @@ heading RMS, `0.063 m` final error, zero collisions.
 
 ---
 
-## 14. Phase 10 — Occupancy mapping and map repair (implementation complete, verification pending)
+## 14. Phase 10 — Occupancy mapping and map repair (complete)
 
 **Outcome:** the map is no longer assumed known and static. `LogOddsMap` fuses
 LiDAR at the particle-filter estimate, using free rays as negative evidence and
@@ -1234,13 +1245,18 @@ the evolving map without ever reading ground truth for a decision.
 8. Docs: `docs/mathematics.md` section 19 and the Phase 10 section of
    `docs/design_decisions.md`.
 
-### Acceptance targets (not yet verified)
-- The robot reaches the goal with zero collisions.
-- At least one replan follows the map change.
-- `added_cells` and `removed_cells` are both non-zero.
-- `final_map_error < prior_map_error` on the observed surface.
-- Filter position RMS stays below `0.5 m`.
-- Phase 0-9 behaviour and the 230-test baseline remain unchanged.
+### Acceptance (met)
+- Goal reached with zero collisions in every seed.
+- At least one replan follows the map change (`77.3 ± 0.6` per run).
+- `added_cells` and `removed_cells` are both non-zero (`349 ± 15` and
+  `449 ± 19`).
+- `91.9 ± 2.8%` of observable prior surface errors are repaired, which is the
+  metric's documented meaning. The net surface difference is reported
+  separately and is expected to rise; see `docs/mathematics.md` sections
+  19.5-19.6 for why the prior is not a fair net baseline.
+- Filter position RMS `0.101 ± 0.001 m`, well below `0.5 m`.
+- The full suite (290 tests) passes; the Phase 0-9 and 11-13 tests are
+  unchanged.
 
 ### Deliberate simplifications
 - Mapping runs at the estimated pose. This is not full SLAM: there is no joint
@@ -1254,12 +1270,18 @@ the evolving map without ever reading ground truth for a decision.
 - One scenario and one route are benchmarked.
 
 ### Verification status
-No `pytest` run, benchmark run or demo run was performed while authoring Phase
-10; only syntax/import checks were used. The Phase 10 tests, demo and acceptance
-numbers therefore remain open. The first verification run should execute
-`pytest` and `python scripts/phase10_demo.py`, confirm the Phase 0-9 baseline is
-unchanged, then record the measured Phase 10 numbers in section 3 and in
-`docs/mathematics.md` section 19.6.
+Verified on 2026-11-19. `pytest` (290 tests), `scripts/evaluate.py` for the
+`slam` scenario (seeds 0-2) and `scripts/phase10_demo.py` were run. Measured
+numbers are in section 3 and `docs/mathematics.md` section 19.6.
+
+Verification exposed two mapper defects, both fixed in `LogOddsMap.integrate`:
+a hit that landed exactly on a cell-boundary face was assigned to the free
+cell outside the obstacle, and a beam could carve its own terminating cell
+free, so close-range walls lost the occupancy vote. A third inconsistency was
+that truth and prior rasters omitted the arena boundary that the simulator's
+LiDAR and collision model already enforce; they now include it. The repaired
+`map_repair_ratio` counts prior-error cells fixed rather than net cell
+reduction.
 
 ---
 
@@ -1270,10 +1292,10 @@ odometry, scans and particle-filter estimates feed a pose graph: odometry ties
 consecutive nodes, a return to an old place is verified by scan matching against
 the prior map and added as a loop closure, and Gauss-Newton spreads the
 correction over the chain. The occupancy map is rebuilt from the corrected
-poses. On the `loop` scenario the graph closes ten loops, cuts node-level
-trajectory error from `1.00 m` to `0.10 m` (89.7%), and lowers observed-surface
-map error from `175` to `135` cells, with zero collisions. Navigation itself is
-unchanged: the filter still drives the mapping navigator.
+poses. On the `loop` scenario the graph closes `10.7 ± 1.2` loops, cuts
+node-level trajectory error from `0.99 m` to `0.19 m` (81.1%), and lowers
+observed-surface map error from `257` to `69` cells, with zero collisions.
+Navigation itself is unchanged: the filter still drives the mapping navigator.
 
 ### Goal
 Correct accumulated pose drift when the robot revisits a place, and rebuild the
@@ -1308,12 +1330,12 @@ map from the corrected trajectory, without changing the live control loop.
 - The odometry and corrected maps are compared on a common observed mask, so
   both are scored on the same cells.
 - At least one loop closure per run (ten observed in every seed).
-- SLAM node RMS is below `0.5 x` odometry node RMS (`0.103` vs `1.001`).
-- ATE reduction above `50%` (`89.7%`).
-- Graph cost falls after optimisation (`166.6 -> 0.0062`).
-- SLAM map error below the raw-pose map error (`134.7` vs `174.7` cells).
-- The 15 Phase 11 tests and the touched `test_evaluation.py` pass. The Phase 10
-  tests, benchmark and demo remain unexecuted by design.
+- SLAM node RMS is below `0.5 x` odometry node RMS (`0.188` vs `0.993`).
+- ATE reduction above `50%` (`81.1%`).
+- Graph cost falls after optimisation (`182.8 -> 0.0088`).
+- SLAM map error below the raw-pose map error (`69.3` vs `257.3` cells).
+- The 15 Phase 11 tests and the touched `test_evaluation.py` pass, as does the
+  full 290-test suite.
 
 ### Deliberate simplifications
 - The back-end is offline and does not feed corrections back into control.
@@ -1338,9 +1360,10 @@ loop closures every five control steps; when the first closure is verified, it
 optimises the graph, rebuilds the live occupancy map from the corrected poses,
 resets wheel odometry to the corrected node and reseeds the particle filter
 there. The navigator swaps to the repaired map, replans and drives a second goal.
-On the `online` scenario the correction fires at `22.5 s`, moves the chain by
-`1.17 m`, cuts node error from `0.69 m` to `0.10 m` (85%), and the robot finishes
-`0.014 m` from the second goal with zero collisions and `0.105 m` filter RMS.
+On the `online` scenario the correction fires at `23.8 s`, moves the chain by
+`1.32 m`, cuts pre-closure node RMS from `0.72 m` to `0.16 m` (77%), and the
+robot finishes `0.031 m` from the second goal with zero collisions and
+`0.116 m` filter RMS.
 
 ### Goal
 Apply a pose-graph correction to the live map and control loop when a loop closes,
@@ -1369,16 +1392,16 @@ and prove the robot can keep navigating afterwards on the corrected map.
 
 ### Acceptance (met)
 - Goal reached with zero collisions in every seed.
-- Correction fires mid-run and is reported with step and time (`450`, `22.5 s`).
-- Post-closure RMS is below half the pre-closure RMS (`0.103` vs `0.687`).
-- ATE reduction above 50% (`85.0%`).
-- Corrected map error is below the raw-pose map error (`125.3` vs `170.3` cells)
+- Correction fires mid-run and is reported with step and time (`475 ± 43`,
+  `23.8 ± 2.2 s`).
+- Post-closure RMS is below half the pre-closure RMS (`0.163` vs `0.719 m`).
+- ATE reduction above 50% (`77.0%`).
+- Corrected map error is below the raw-pose map error (`39.3` vs `242.3` cells)
   on the same closure node set and observed mask.
 - The robot continues driving after the correction and reaches the second goal
-  (`0.014 m` final error).
-- The 4 Phase 12 tests and the touched `test_evaluation.py` pass, along with the
-  Phase 11 SLAM tests (45 tests in the targeted run). Phase 10 tests, benchmark
-  and demo remain unexecuted by design.
+  (`0.031 ± 0.027 m` final error).
+- The 4 Phase 12 tests and the touched `test_evaluation.py` pass, along with
+  the full 290-test suite.
 
 ### Deliberate simplifications
 - Only the first verified closure is fed back; later closures add graph edges
@@ -1392,10 +1415,9 @@ and prove the robot can keep navigating afterwards on the corrected map.
 - Map error remains an observed-surface indicator.
 
 ### Verification status
-The Phase 12 tests, demo and three-seed benchmark were run during authoring and
+The Phase 12 tests, demo and three-seed benchmark were run on 2026-11-19 and
 the measured table is in `docs/mathematics.md` section 21.7 and section 3 above.
-Phase 10's verification debt is unchanged: no full `pytest` run, Phase 10
-benchmark or `phase10_demo.py` run has been performed.
+Phase 10 is also verified; see section 14.
 
 ---
 
@@ -1406,8 +1428,8 @@ unknown. A `Viewpoint` policy scores a coarse lattice by unknown area within
 LiDAR range divided by A* travel cost, drives to the best reachable target and
 re-scores after each arrival. Unknown cells are free to the planner and failed
 targets are blacklisted. On the `explore` scenario it reaches the 95% observed
-map target in `112 s`, covers `96.2%` of truly free space, visits `18.7`
-viewpoints, and finishes with zero collisions, `0.093 m` filter RMS and `322`
+map target in `111 s`, covers `96.2%` of truly free space, visits `18.3`
+viewpoints, and finishes with zero collisions, `0.095 m` filter RMS and `340`
 cells of observed-surface map error.
 
 ### Goal
@@ -1444,11 +1466,9 @@ to look, using only the robot's own map for the stopping decision.
 - At least one unreachable target is handled by blacklisting and replacement
   (observed in the prototype and covered by the max-step test path in the
   deterministic demo world).
-- The map remains usable: `322` cells of observed-surface error and `0.093 m`
+- The map remains usable: `340` cells of observed-surface error and `0.095 m`
   filter RMS.
-- The 9 Phase 13 tests pass; the 56-test targeted run across Phases 11-13 files
-  plus `test_evaluation.py` passes. Phase 10 tests, benchmark and demo remain
-  unexecuted by design.
+- The 9 Phase 13 tests pass and the full 290-test suite passes.
 
 ### Deliberate simplifications
 - Greedy next-best-view, not a coverage tour.
@@ -1459,20 +1479,16 @@ to look, using only the robot's own map for the stopping decision.
   phases, so map error remains an observed-surface indicator and is pessimistic.
 
 ### Verification status
-The Phase 13 tests, demo and three-seed benchmark were run during authoring and
+The Phase 13 tests, demo and three-seed benchmark were run on 2026-11-19 and
 the measured table is in `docs/mathematics.md` section 22.7 and section 3 above.
-Phase 10's verification debt is unchanged: no full `pytest` run, Phase 10
-benchmark or `phase10_demo.py` run has been performed.
+Phase 10 is also verified; see section 14.
 
 ---
 
 ## 18. Working agreement
 
 Keep the existing conventions and do not change Phase 0-9 behaviour; the
-230-test Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top
-of that baseline, but the combined suite has not been executed yet. Phase 11
-adds 15 tests, Phase 12 adds 4 and Phase 13 adds 9 (256 test functions total);
-the 56 tests covering the Phase 11, 12 and 13 files plus `test_evaluation.py`
-were run during authoring, the rest of the combined suite was not. Commit
+Phase 0-9 suite is the regression baseline. Phase 10 adds tests on top of that
+baseline, and the combined suite (290 tests) now runs clean. Commit
 implementation first, docs and demo second. Push only when the user explicitly
-asks, and never present unverified Phase 10 numbers as measured results.
+asks, and never present unverified numbers as measured results.

@@ -41,28 +41,27 @@ phantom obstacles, while endpoint hits raise them and add obstacles the prior
 missed. A `MappingNavigator` plans on the evolving map, replans when new
 evidence blocks the route or removes a phantom, and the filter rebuilds its
 likelihood field whenever the map changes. The `slam` scenario starts from a
-prior with one phantom obstacle and one missing block; the run repairs both.
-The implementation and tests for this phase are complete, but the benchmark and
-demo were intentionally not executed during authoring, so no measured Phase 10
-numbers are claimed yet.
+prior with one phantom obstacle and one missing block; the run repairs `91.9%`
+of the observable prior surface errors in `~60 s` with zero collisions,
+`0.101 m` filter RMS and `0.064 m` final error.
 
 Phase 11 adds the missing back-end. Wheel odometry, scans and filter estimates
 from a run feed a pose graph: consecutive nodes are tied by odometry, and a
 return to an old place is verified by scan matching against the prior map and
 added as a loop closure. Gauss-Newton spreads the closure over the chain, and
 the occupancy map is rebuilt from the corrected poses. On the `loop` scenario
-the graph detects ten closures, cuts node-level trajectory error from `1.00 m`
-to `0.10 m` (90% reduction), and lowers observed-surface map error from `175`
-to `135` cells, with zero collisions.
+the graph detects `10.7` closures, cuts node-level trajectory error from
+`0.99 m` to `0.19 m` (81% reduction), and lowers observed-surface map error
+from `257` to `69` cells, with zero collisions.
 
 Phase 12 makes that correction an event inside the run. The same back-end runs
 during navigation; when the first loop closure is verified, the graph is
 optimised mid-drive, the live map is rebuilt from the corrected poses, odometry
 and the particle filter are reset to the corrected node, and the navigator
 replans and continues to a second goal. On the `online` scenario the correction
-fires at `22.5 s` and moves the chain by `1.17 m`, cutting node error from
-`0.69 m` to `0.10 m` (85%); the robot then drives another ~65 nodes on the
-repaired map and finishes `0.014 m` from the second goal with zero collisions.
+fires at `23.8 s` and moves the chain by `1.32 m`, cutting pre-closure node RMS
+from `0.72 m` to `0.16 m` (77%); the robot then drives on the repaired map and
+finishes `0.031 m` from the second goal with zero collisions.
 
 Phase 13 removes the last assumption: that the map is known in extent. The
 `explore` scenario starts from an empty prior where every cell is unknown, and
@@ -70,15 +69,15 @@ a next-best-view policy scores a coarse lattice of candidate cells by the
 unknown area within LiDAR range divided by the A* travel cost. Unknown cells
 are free to the planner, so the robot walks out of the observed region;
 unreachable targets are blacklisted and replaced. Across seeds 0-2 it reached
-the 95% observed-map target in `112 s`, visited `18.7` viewpoints, covered
-`96.2%` of truly free space, and finished with zero collisions, `0.093 m`
-filter RMS and `322` cells of observed-surface map error.
+the 95% observed-map target in `111 s`, visited `18.3` viewpoints, covered
+`96.2%` of truly free space, and finished with zero collisions, `0.095 m`
+filter RMS and `340` cells of observed-surface map error.
 
-> **Verification note:** Phases 0-9 were verified before their releases. Phase 10
-> was committed with syntax/import checks only; run `pytest` and
-> `python scripts/phase10_demo.py` to confirm the numbers before treating them
-> as a regression baseline. Phases 11-13 were each verified with their own
-> tests, demo and three-seed benchmark run.
+> **Verification note:** Phases 0-13 have been verified with their own tests,
+> demo and three-seed benchmark. The combined suite (290 tests) passes. Phase 10
+> now reports both a repair ratio (fraction of prior-error cells fixed) and a
+> net map-error count; see `docs/mathematics.md` §19.5-19.6 for why the net
+> count can rise above a near-perfect prior.
 
 ## Layout
 

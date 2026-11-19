@@ -72,6 +72,9 @@ def test_slam_trace_repairs_the_map_and_reaches_the_goal():
     # difference is not asserted to fall: the prior is near-perfect apart from
     # the two planted defects, so a 40-beam map legitimately adds cell-level
     # sampling error wherever it looks, even while fixing those defects.
+    # This 300-particle / 40-beam path repairs 36 of 41 prior errors (0.878);
+    # the 800 / 60 benchmark mean is 0.919. The bound stays below the measured
+    # value but well above a no-op map.
     assert metrics.map_repair_ratio > 0.85
     assert metrics.map_error_reduction == (
         metrics.prior_map_error - metrics.final_map_error

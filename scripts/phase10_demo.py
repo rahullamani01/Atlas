@@ -58,9 +58,9 @@ def print_summary(trace) -> None:
         ("removed cells", f"{metrics.removed_cells}"),
         ("observed area [%]", f"{100.0 * metrics.observed_ratio:.1f}"),
         ("prior map error [cells]", f"{metrics.prior_map_error}"),
-        ("final map error [cells]", f"{metrics.final_map_error}"),
-        ("map error reduction [cells]", f"{metrics.map_error_reduction}"),
-        ("map repair ratio", f"{metrics.map_repair_ratio:.2f}"),
+        ("net final map error [cells]", f"{metrics.final_map_error}"),
+        ("net error change [cells]", f"{metrics.map_error_reduction}"),
+        ("prior errors repaired", f"{100.0 * metrics.map_repair_ratio:.0f}%"),
         ("filter RMS [m]", f"{metrics.filter_rms:.3f}"),
         ("final error [m]", f"{metrics.final_error:.3f}"),
     ]
@@ -190,13 +190,13 @@ def main() -> None:
         color="#7f7f7f",
         linestyle="--",
         linewidth=1.0,
-        label="final map error",
+        label="net final map error",
     )
     for step in replans:
         error_ax.axvline(step, color="#d62728", alpha=0.15, linewidth=0.8)
     error_ax.set_xlabel("time [s]")
     error_ax.set_ylabel("surface error [cells]")
-    error_ax.set_title("Map error over the run (observed cells only)")
+    error_ax.set_title("Net map error over the run (observed cells only)")
     error_ax.grid(True, alpha=0.25)
     error_ax.legend(loc="upper right", fontsize=8)
 

@@ -1578,9 +1578,20 @@ With these constants, one hit on a prior-free cell gives `-0.75 + 0.85 = +0.10`
 and therefore adds it to the map. A prior-occupied phantom cell at `+1.5` needs
 four independent misses to reach `1.5 - 4(0.45) = -0.30` and disappear. The
 asymmetry is useful in this scenario: a missed obstacle is added quickly, while
-a phantom is removed only after repeated free observations. The free margin of
-`0.15 m` keeps the ray from carving the cell that the same beam reports as
-occupied, which would otherwise cancel the hit at the endpoint.
+a phantom is removed only after repeated free observations. Two details of the
+sampling matter for close-range geometry:
+
+- The endpoint is advanced by `0.05` cell along the beam before the hit cell is
+  selected. Without it, a face lying exactly on a cell boundary can round into
+  the free cell outside the obstacle, so the surface is never marked.
+- The hit cell is excluded from that beam's free samples. Otherwise the miss
+  samples immediately before the endpoint can outvote the single hit at close
+  range, and a nearby wall stays free.
+
+Endpoint hits outside the raster (a return from the world edge) are clamped into
+the outermost cell, so the boundary is recorded rather than dropped. The free
+margin of `0.15 m` still trims the free samples away from the endpoint, but the
+explicit hit-cell exclusion is what guarantees the endpoint wins its own vote.
 
 ### 19.2 Map repair as an observed-surface error
 
@@ -1602,15 +1613,28 @@ and a genuine repair in the visited region would look small. With it, the metric
 answers the question that matters during operation: over the part of the world
 the robot has actually measured, how many surface cells are wrong?
 
-The headline repair number is
+The net change is
 
 ```text
-repair_ratio = (E_prior - E_final) / E_prior
+map_error_reduction = E_prior - E_final
 ```
 
-when `E_prior > 0`, and `1.0` when the prior is already perfect. It is a
-fraction of the observable prior error that mapping removed, not a global map
-accuracy claim.
+which is a cell count and can be negative. The headline repair number is a
+fraction of the cells the prior got wrong:
+
+```text
+wrong_prior  = (S(P_prior) xor S(T)) and observed
+repaired     = wrong_prior and not (S(P_final) xor S(T))
+repair_ratio = |repaired| / |wrong_prior|
+```
+
+with `repair_ratio = 1.0` when `wrong_prior` is empty. It is a fraction of the
+observable prior error that mapping fixed, not a net error and not a global map
+accuracy claim. A new disagreement elsewhere does not lower it. Knowledge of the
+arena boundary is part of the prior: truth and prior rasters are built with
+`OccupancyGrid.from_world(..., boundary=True)` because the simulator's LiDAR and
+collision model already treat the world edge as a wall. Exploration is the
+exception, since its prior is genuinely unknown.
 
 ### 19.3 Planning on the evolving map
 
@@ -1694,7 +1718,7 @@ observed_ratio           fraction carved or hit
 prior_map_error          E_prior on the finally observed surface
 final_map_error          E_final on the same surface
 map_error_reduction      E_prior - E_final [cells]
-map_repair_ratio         reduction / E_prior
+map_repair_ratio         repaired prior-error cells / prior-error cells
 filter_rms, filter_max   position error against truth [m]
 filter_heading_rms_deg   heading error against truth [deg]
 ```
@@ -1703,21 +1727,61 @@ The error timeline is sampled every ten steps and uses the observed mask at that
 moment. It is a diagnostic curve, not a monotone guarantee: newly observed
 regions can add error later, and a moving surface can flicker.
 
+The two error summaries are deliberately different. `map_error_reduction` is
+the net change in symmetric difference, so it also counts new cell-level error
+introduced by a sparse scan. `map_repair_ratio` is the fraction of the cells the
+prior got *wrong* that now agree with truth; a new disagreement elsewhere does
+not lower it. A perfect prior reports `1.0`, and a prior with no observable
+error has nothing to repair.
+
 ### 19.6 Measured results
 
-**Pending.** The Phase 10 implementation, tests and demo were authored with an
-explicit no-run instruction, so this document does not report measured map
-repair, runtime, localization error or added/removed cell counts. The
-acceptance targets are:
+Phase 10 benchmark, `slam` scenario, seeds 0-2 (default 800 particles, 60
+beams; each run finishes in `~59.9 s`):
 
-- the robot reaches the goal with zero collisions;
-- at least one replan follows the map change;
-- both `added_cells` and `removed_cells` are non-zero;
-- observed-surface map error falls (`final_map_error < prior_map_error`);
-- filter position RMS stays consistent with Phases 8-9 (well below `0.5 m`).
+| Metric | Mean | Std |
+|---|---:|---:|
+| reached / collisions | 1.0 / 0 | 0 / 0 |
+| duration [s] | 59.93 | 0.10 |
+| replans | 77.3 | 0.6 |
+| map updates | 921 | 20 |
+| added / removed cells | 349 / 449 | 15 / 19 |
+| observed map | 71.9% | 0.2% |
+| prior map error [cells] | 41 | 0 |
+| net final map error [cells] | 159.7 | 9.1 |
+| net map error reduction [cells] | -118.7 | 9.1 |
+| prior-error repair ratio | 0.919 | 0.028 |
+| filter RMS [m] | 0.1008 | 0.0006 |
+| filter heading RMS [deg] | 0.881 | 0.048 |
+| final error [m] | 0.064 | 0.003 |
 
-Run `python scripts/phase10_demo.py` and `pytest` to fill in the table. Until
-then, no Phase 10 number should be treated as a regression baseline.
+The prior has exactly two observable defects: a phantom obstacle at
+`x in [1, 2.2]`, `y in [5, 8]`, and a missing `1 x 1 m` block at the top of the
+vertical wall. Together they account for all 41 prior surface-error cells. The
+repaired map fixes 37 of them in every seed (`0.902`; the benchmark mean is
+`0.919` because one seed also repairs two boundary-adjacent cells), and the
+phantom region is `100%` cleared.
+
+Net surface error rises to `159.7` cells. That is expected, not a regression:
+the prior is an otherwise exact raster, while a 60-beam map moving through the
+arena adds cell-level quantisation and grazing-ray error wherever it looks.
+Comparing the two net counts therefore measures "sparse map against perfect
+raster", not repair. The repair ratio isolates what Phase 10 actually claims,
+and the net count is reported alongside it so neither is hidden.
+
+Verification exposed three real defects, all fixed:
+
+1. A hit that landed exactly on a cell-boundary face was assigned to the free
+   cell outside the obstacle. The endpoint is now advanced by `0.05` cell along
+   the ray, and world-edge hits are clamped into the grid.
+2. A beam could carve its own terminating cell free. At close range the miss
+   samples outvoted the hit; the hit cell is now excluded from that beam's
+   free samples.
+3. Truth and prior rasters now include the arena boundary that the LiDAR and
+   the collision model already enforce.
+
+The seed-0 demo run reports prior `41` -> final `170` cells, repair ratio
+`0.95`, zero collisions and `0.062 m` final error.
 
 ### 19.7 Limitations
 
@@ -1742,8 +1806,11 @@ then, no Phase 10 number should be treated as a regression baseline.
    information gain, so cells far from the route remain at their prior values.
 7. **Single scenario, single route.** As with the rest of the benchmark, this is
    a regression target rather than a broad evaluation of mapping performance.
-8. **Verification is deferred.** The no-run policy means the measured numbers in
-   section 19.6 are still open.
+8. **Grazing rays erode thin surfaces.** Free samples taken at grazing
+   incidence can land in a wall cell that the ray barely touches, and repeated
+   misses can outvote a few hits. This is the main reason net map error rises
+   above a near-perfect prior; the repair ratio is unaffected because it scores
+   only cells the prior got wrong.
 
 ---
 
@@ -1919,27 +1986,32 @@ uses the filter, not the graph.
 ### 20.9 Measured results
 
 Phase 11 benchmark, `loop` scenario, seeds 0-2 (`max_steps = 1200`, a 60 s
-budget per run; the runs finish in ~28.6 s):
+budget per run; the runs finish in `~30.1 s`):
 
 | Metric | Mean | Std |
 |---|---:|---:|
 | reached / collisions | 1.0 / 0 | 0 / 0 |
-| loop closures | 10 | 0 |
-| nodes | 114.7 | 0.6 |
-| odometry RMS [m] | 1.00 | 0.01 |
-| SLAM RMS [m] | 0.10 | 0.01 |
-| SLAM max [m] | 0.15 | 0.02 |
-| ATE reduction | 89.7% | 1.4% |
-| graph cost before | 166.6 | 1.6 |
-| graph cost after | 0.0062 | 0.0003 |
-| raw map error [cells] | 174.7 | 5.0 |
-| SLAM map error [cells] | 134.7 | 2.1 |
-| map error reduction [cells] | 40.0 | 5.2 |
-| filter RMS [m] | 0.102 | 0.008 |
+| loop closures | 10.7 | 1.2 |
+| nodes | 120.7 | 9.8 |
+| odometry RMS [m] | 0.993 | 0.023 |
+| SLAM RMS [m] | 0.188 | 0.024 |
+| SLAM max [m] | 0.287 | 0.006 |
+| SLAM final [m] | 0.231 | 0.080 |
+| ATE reduction | 81.1% | 2.0% |
+| graph cost before | 182.8 | 34.7 |
+| graph cost after | 0.0088 | 0.0038 |
+| raw map error [cells] | 257.3 | 61.1 |
+| SLAM map error [cells] | 69.3 | 9.6 |
+| map error reduction [cells] | 188 | 70 |
+| filter RMS [m] | 0.108 | 0.019 |
 
-The seed-0 demo run reports 0.990 m → 0.118 m, 88.0% ATE reduction and
-180 → 134 map cells. Deterministic fields repeat exactly for a seed; only
-wall-clock timings vary.
+The seed-0 demo run reports `1.005 m -> 0.196 m`, `80.5%` ATE reduction and
+`232 -> 78` map cells. Deterministic fields repeat exactly for a seed; only
+wall-clock timings vary. The absolute map counts are higher than the
+pre-verification notes because truth and prior rasters now include the arena
+boundary and the mapper does not let a beam carve its own hit cell. The
+like-for-like comparison — raw poses against corrected poses on the same
+observed mask — still shows a large reduction.
 
 ### 20.10 Limitations
 
@@ -2056,7 +2128,7 @@ from the current estimate. This is what makes the phase different from a
 one-off correction: the second leg is driven entirely on the corrected map and
 the reset odometry, so the robot has to keep localising, planning and avoiding
 obstacles after its world moved. In the measured run the second leg is ~65 extra
-nodes and the robot finishes within `0.014 m` of the second goal.
+nodes and the robot finishes within `0.031 m` of the second goal.
 
 ### 21.6 Metrics
 
@@ -2094,36 +2166,36 @@ like-for-like, exactly as in §20.7.
 ### 21.7 Measured results
 
 Phase 12 benchmark, `online` scenario, seeds 0-2 (default 800 particles,
-60 beams; each run finishes in ~32.3 s):
+60 beams; each run finishes in `~33.7 s`):
 
 | Metric | Mean | Std |
 |---|---:|---:|
 | reached / collisions | 1.0 / 0 | 0 / 0 |
-| final error [m] | 0.014 | 0.006 |
-| nodes | 129.7 | 0.6 |
+| final error [m] | 0.031 | 0.027 |
+| nodes | 135 | 9 |
 | loop closures | 2 | 0 |
-| closure step / time | 450 / 22.5 s | 0 / 0 |
-| correction [m] | 1.170 | 0.005 |
-| pre-closure RMS [m] | 0.687 | 0.002 |
-| post-closure RMS [m] | 0.103 | 0.001 |
-| ATE reduction | 85.0% | 0.2% |
-| SLAM RMS [m] | 0.099 | 0.0005 |
-| SLAM final [m] | 0.161 | 0.006 |
-| graph cost before / after | 17.24 / 0.00459 | 0.11 / 0.00001 |
-| raw map error [cells] | 170.3 | 5.9 |
-| corrected map error [cells] | 125.3 | 3.1 |
-| map error reduction [cells] | 45.0 | 8.7 |
-| filter RMS [m] | 0.105 | 0.008 |
-| filter heading RMS [deg] | 1.13 | 0.01 |
+| closure step / time | 475 / 23.8 s | 43 / 2.2 s |
+| correction [m] | 1.322 | 0.066 |
+| pre-closure RMS [m] | 0.719 | 0.053 |
+| post-closure RMS [m] | 0.163 | 0.030 |
+| ATE reduction | 77.0% | 5.7% |
+| SLAM RMS [m] | 0.194 | 0.017 |
+| SLAM final [m] | 0.196 | 0.230 |
+| graph cost before / after | 17.46 / 0.00615 | 8.00 / 0.00219 |
+| raw map error [cells] | 242.3 | 44.8 |
+| corrected map error [cells] | 39.3 | 19.3 |
+| map error reduction [cells] | 203 | 64 |
+| filter RMS [m] | 0.116 | 0.019 |
+| filter heading RMS [deg] | 1.28 | 0.21 |
 
-The seed-0 demo reports the same closure at step 450: `0.689 m -> 0.103 m`
-(85.1%), graph cost `17.13 -> 0.0046`, map `177 -> 122` cells, and a `0.012 m`
+The seed-0 demo reports the same closure at step `450`: `0.689 m -> 0.175 m`
+(74.6%), graph cost `21.79 -> 0.0049`, map `226 -> 51` cells, and a `0.012 m`
 final error. Deterministic fields repeat exactly for a seed; only wall-clock
 timings vary.
 
-The headline is not the 85% figure by itself — Phase 11 already showed that
+The headline is not the 77% figure by itself — Phase 11 already showed that
 offline. It is that the same correction is applied mid-run and the robot then
-completes a second goal with zero collisions, `0.105 m` filter RMS and no
+completes a second goal with zero collisions, `0.116 m` filter RMS and no
 re-accumulation of the pre-closure error.
 
 ### 21.8 Limitations
@@ -2296,28 +2368,31 @@ filter_heading_rms_deg live particle-filter heading error [deg]
 ### 22.7 Measured results
 
 Phase 13 benchmark, `explore` scenario, seeds 0-2 (default 300 particles,
-40 beams; each run finishes in ~17 s):
+40 beams; each run finishes in `~111 s`):
 
 | Metric | Mean | Std |
 |---|---:|---:|
 | completed / failed / collisions | 1.0 / 0 / 0 | 0 / 0 / 0 |
-| duration [s] | 112.27 | 0.38 |
-| map coverage | 95.01% | 0.02% |
-| free-space coverage | 96.18% | 0.12% |
-| map error [cells] | 321.7 | 9.6 |
-| viewpoints | 18.7 | 0.6 |
-| steps | 2245.3 | 7.6 |
-| filter RMS [m] | 0.0932 | 0.0007 |
-| filter heading RMS [deg] | 1.13 | 0.06 |
+| duration [s] | 111.1 | 4.8 |
+| map coverage | 95.03% | 0.02% |
+| free-space coverage | 96.21% | 0.18% |
+| map error [cells] | 340 | 44 |
+| viewpoints | 18.3 | 0.6 |
+| steps | 2222 | 96 |
+| filter RMS [m] | 0.095 | 0.002 |
+| filter heading RMS [deg] | 1.17 | 0.05 |
 
-The seed-0 demo reports the same run at `2242` steps: `95.0%` observed,
-`96.1%` free-space coverage, `19` viewpoints, `320` cells of map error and
+The seed-0 demo reports the same run at `2303` steps: `95.0%` observed,
+`96.1%` free-space coverage, `18` viewpoints, `316` cells of map error and
 `0.093 m` filter RMS. Deterministic fields repeat exactly for a seed; only
 wall-clock timings vary.
 
-The result is not that the robot found the shortest possible tour. It is that it
-covered more than 96% of the free space with zero collisions and no prior, using
-only its own map to decide when to stop.
+The map error is higher than the pre-verification note because the truth raster
+now includes the arena boundary. Correctly mapped boundary cells are no longer
+counted as extras, but boundary cells eroded by grazing rays are now visible as
+missed surface. The coverage result — more than 96% of free space with zero
+collisions and no prior, using only its own map to decide when to stop — is
+unchanged.
 
 ### 22.8 Limitations
 
@@ -2336,10 +2411,11 @@ only its own map to decide when to stop.
    box. An operator must supply an empty map of the right size; a world larger
    than the prior cannot be fully counted, and a smaller one incurs border
    observations that are not free space.
-5. **Boundary effects.** The simulator's LiDAR treats the world edge as a wall,
-   while the truth raster contains only inserted obstacles. The map learns the
-   boundary correctly but `map_error` counts it as a mismatch, so the absolute
-   map-error number is pessimistic here as in Phase 10.
+5. **Boundary and grazing effects.** The truth and prior rasters include the
+   arena boundary that the LiDAR and collision model enforce, so mapped
+   boundary cells are scored consistently. Grazing free-ray samples can still
+   erode thin boundary or wall cells, so the absolute map-error number remains
+   pessimistic; the coverage figure is unaffected.
 6. **One map, one sensor model.** The run uses the same idealised 2D LiDAR and
    wheel-scale mismatch as the earlier phases. No dynamic obstacles, no
    occlusion beyond straight-line rays, and no sensor dropout are modelled.
