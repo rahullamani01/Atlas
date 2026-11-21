@@ -324,10 +324,11 @@ def run_localization(
     follower = PathFollower(heading_pid=_heading_pid("pid"))
     sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
     lidar = Lidar(
-        max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed
+        max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed
     )
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -392,7 +393,7 @@ def run_recovery(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     robot = DifferentialDriveRobot(pose=_start_pose(path))
     sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
     lidar = Lidar(
-        max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed
+        max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed
     )
     detector = DynamicObstacleMap(grid, clearance=scenario.inflation)
     goal_cell = grid.world_to_cell(*scenario.goal)
@@ -443,9 +444,10 @@ def simulate_integrated(
     world, grid, _, path = _plan(scenario)
     robot = DifferentialDriveRobot(pose=_start_pose(path))
     sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -570,9 +572,10 @@ def simulate_relocalization(
 
     robot = DifferentialDriveRobot(pose=_start_pose(path))
     sim = Simulator(world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -833,9 +836,10 @@ def simulate_mapping(
 
     robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
     sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -847,7 +851,8 @@ def simulate_mapping(
     )
     pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
     navigator = MappingNavigator(
-        mapping, goal_cell, inflation=scenario.inflation
+        mapping, goal_cell, inflation=scenario.inflation,
+        map_repair=scenario.map_repair,
     )
     if not navigator.plan(pf.estimate()):
         raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
@@ -1016,9 +1021,10 @@ def simulate_slam(
 
     robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
     sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -1034,6 +1040,7 @@ def simulate_slam(
         goal_cell,
         inflation=scenario.inflation,
         follower=PathFollower(max_linear_speed=SLAM_SPEED),
+        map_repair=scenario.map_repair,
     )
     if not navigator.plan(pf.estimate()):
         raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
@@ -1083,7 +1090,7 @@ def simulate_slam(
 
     raw_nodes = slam.corrected()
     raw_errors = slam.node_errors(raw_nodes)
-    slam.solve()
+    slam.solve(detect=scenario.loop_closure)
     corrected = slam.corrected()
     slam_errors = slam.node_errors(corrected)
 
@@ -1215,9 +1222,10 @@ def simulate_online_slam(
 
     robot = DifferentialDriveRobot(pose=_start_pose(initial_path))
     sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(
@@ -1233,6 +1241,7 @@ def simulate_online_slam(
         goal_cells[0],
         inflation=scenario.inflation,
         follower=PathFollower(max_linear_speed=SLAM_SPEED),
+        map_repair=scenario.map_repair,
     )
     if not navigator.plan(pf.estimate()):
         raise RuntimeError(f"scenario {scenario.name!r} has no prior route")
@@ -1280,7 +1289,8 @@ def simulate_online_slam(
         slam.observe(step, odometry.pose, estimate, robot.pose, scan)
 
         if (
-            not corrected_once
+            scenario.loop_closure
+            and not corrected_once
             and step % slam.check_interval == 0
             and len(slam.graph.poses) > slam.min_gap
         ):
@@ -1314,13 +1324,14 @@ def simulate_online_slam(
 
                 rebuilt = slam.map_from(corrected)
                 closure_map = rebuilt
-                mapping = rebuilt
-                navigator.replace_map(rebuilt)
+                if scenario.map_repair:
+                    mapping = rebuilt
+                    navigator.replace_map(rebuilt)
                 current = corrected[-1]
                 odometry.reset(
                     Pose(current.x, current.y, current.theta)
                 )
-                pf.replace_grid(rebuilt.to_grid(scenario.inflation))
+                pf.replace_grid(navigator.planning_grid())
                 pf.initialize(
                     current, position_std=0.05, heading_std=0.02
                 )
@@ -1498,9 +1509,10 @@ def simulate_exploration(
         pose=Pose(*planning.cell_to_world(start_cell), 0.0)
     )
     sim = Simulator(truth_world, robot, dt=scenario.dt, method="midpoint")
-    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=LIDAR_SIGMA, seed=seed)
+    lidar = Lidar(max_range=LIDAR_RANGE, range_sigma=scenario.lidar_sigma, seed=seed)
     odometry = Odometry(
-        left_scale=WHEEL_SCALE_LEFT, right_scale=WHEEL_SCALE_RIGHT
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
     )
     odometry.reset(Pose(robot.pose.x, robot.pose.y, robot.pose.theta))
     pf = ParticleFilter(

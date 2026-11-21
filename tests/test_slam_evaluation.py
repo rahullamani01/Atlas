@@ -1,12 +1,18 @@
 """End-to-end tests for mapping and map repair during navigation (Phase 10)."""
 from dataclasses import replace
 
+import numpy as np
+import pytest
+
 from atlas.evaluation import (
     MappingMetrics,
     get_scenario,
     run_mapping,
     simulate_mapping,
+    simulate_slam,
+    simulate_online_slam,
 )
+from atlas.slam.slam import PoseGraphSlam
 from atlas.simulation.world import RectObstacle
 
 
@@ -97,3 +103,31 @@ def test_slam_run_is_reproducible_for_a_seed():
     first = run_mapping(scenario, seed=3, particles=200, beams=30)
     second = run_mapping(scenario, seed=3, particles=200, beams=30)
     assert first.metrics == second.metrics
+
+
+def test_map_repair_ablation_keeps_prior():
+    scenario = replace(get_scenario("slam"), max_steps=10, map_repair=False)
+    trace = simulate_mapping(scenario, particles=50, beams=10)
+    assert trace.metrics.map_updates == 0
+    assert np.array_equal(trace.prior_grid.blocked, trace.final_grid.blocked)
+
+
+@pytest.mark.parametrize(
+    "name,runner", [("loop", simulate_slam), ("online", simulate_online_slam)]
+)
+def test_loop_closure_ablation_skips_detection(name, runner, monkeypatch):
+    original_init = PoseGraphSlam.__post_init__
+
+    def short_gap(self):
+        self.min_gap = 1
+        self.check_interval = 1
+        original_init(self)
+
+    def unexpected(self):
+        raise AssertionError("loop detection must be disabled")
+
+    monkeypatch.setattr(PoseGraphSlam, "__post_init__", short_gap)
+    monkeypatch.setattr(PoseGraphSlam, "close_loops", unexpected)
+    scenario = replace(get_scenario(name), max_steps=10, loop_closure=False)
+    trace = runner(scenario, particles=50, beams=10)
+    assert trace.metrics.loop_closures == 0

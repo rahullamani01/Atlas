@@ -16,7 +16,7 @@ import math
 from dataclasses import dataclass
 
 from atlas.control import PID, PathFollower, Twist
-from atlas.mapping.occupancy_map import LogOddsMap
+from atlas.mapping.occupancy_map import LogOddsMap, MapUpdate
 from atlas.planning import OccupancyGrid, a_star
 from atlas.planning.grid import Cell
 from atlas.recovery import nearest_free_cell
@@ -43,6 +43,7 @@ class MappingNavigator:
         inflation: float = 0.30,
         follower: PathFollower | None = None,
         replan_interval: int = 15,
+        map_repair: bool = True,
     ) -> None:
         if inflation < 0:
             raise ValueError("inflation must be non-negative")
@@ -56,6 +57,7 @@ class MappingNavigator:
             heading_pid=PID(kp=2.0, ki=0.2, kd=0.05)
         )
         self.replan_interval = int(replan_interval)
+        self.map_repair = map_repair
 
         self.path: list[tuple[float, float]] = []
         self.events: list[MapEvent] = []
@@ -154,7 +156,7 @@ class MappingNavigator:
             raise ValueError("dt must be positive")
         self._step += 1
 
-        update = self.map.integrate(scan, pose)
+        update = self.map.integrate(scan, pose) if self.map_repair else MapUpdate()
         if update.changed:
             self.map_updates += 1
             self.map_version += 1

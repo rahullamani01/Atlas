@@ -86,6 +86,14 @@ class Scenario:
     runner uses it to continue driving after a loop closure.
     ``coverage_target`` is the observed map fraction that ends an exploration
     run, so the robot stops on its own evidence rather than on a step budget.
+
+    The sensor and odometry fields are experiment knobs. ``lidar_sigma`` is the
+    range-noise standard deviation, and the wheel scales are the multiplicative
+    odometry errors applied to each wheel. Defaults reproduce the numbers in
+    the rest of the documentation. ``loop_closure`` disables loop detection in
+    SLAM runs; ``map_repair`` freezes the live prior in mapping and SLAM runs.
+    Offline reconstruction still builds maps for scoring. A frozen map has no
+    observed cells, so its observed-surface repair metrics are not meaningful.
     """
 
     name: str
@@ -106,12 +114,21 @@ class Scenario:
     kidnap_step: int | None = None
     kidnap_pose: tuple[float, float, float] | None = None
     coverage_target: float = 0.95
+    lidar_sigma: float = 0.02
+    wheel_scale_left: float = 0.99
+    wheel_scale_right: float = 1.01
+    loop_closure: bool = True
+    map_repair: bool = True
 
     def __post_init__(self) -> None:
         if not self.name:
             raise ValueError("name must be non-empty")
         if self.kind not in KINDS:
             raise ValueError(f"kind must be one of {KINDS}")
+        if not self.loop_closure and self.kind not in ("slam_loop", "slam_online"):
+            raise ValueError("loop_closure ablation requires a SLAM scenario")
+        if not self.map_repair and self.kind not in ("slam", "slam_loop", "slam_online"):
+            raise ValueError("map_repair ablation requires a mapping or SLAM scenario")
         if self.resolution <= 0:
             raise ValueError("resolution must be positive")
         if self.inflation < 0:
@@ -152,6 +169,12 @@ class Scenario:
                 raise ValueError("kidnap_pose values must be finite")
         if not 0.0 < self.coverage_target <= 1.0:
             raise ValueError("coverage_target must be in (0, 1]")
+        if not math.isfinite(self.lidar_sigma) or self.lidar_sigma < 0.0:
+            raise ValueError("lidar_sigma must be finite and non-negative")
+        if not math.isfinite(self.wheel_scale_left) or self.wheel_scale_left <= 0:
+            raise ValueError("wheel_scale_left must be finite and positive")
+        if not math.isfinite(self.wheel_scale_right) or self.wheel_scale_right <= 0:
+            raise ValueError("wheel_scale_right must be finite and positive")
 
 
 SCENARIOS: dict[str, Scenario] = {
