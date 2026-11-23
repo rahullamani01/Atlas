@@ -6,14 +6,14 @@
 **Purpose:** a shareable strategy for turning ATLAS into a flagship project.
 
 Status of this document: adopted 18 November 2026. Workstream A (verification
-and reliability) is complete; Workstream B is the next active workstream. Update
+and reliability) is complete; Workstream B is in progress. Update
 the status column when a workstream starts or lands, and keep the measured
 claims in this file in sync with `README.md` and `docs/handoff.md`.
 
 | Workstream | Scope | Status |
 |---|---|---|
 | A | Verification and engineering reliability | complete (19 Nov 2026) |
-| B | Scientific evaluation and benchmark quality | next |
+| B | Scientific evaluation and benchmark quality | in progress |
 | C | ATLAS research dashboard | planned |
 | D | Mathematical and technical depth | ongoing (mathematics.md) |
 | E | Limitations and future research | planned |
@@ -228,6 +228,52 @@ well** they work.
 
 ATLAS already has a benchmark harness, scenarios and multiple random seeds.
 Build on that foundation instead of creating a disconnected evaluation system.
+
+The first study compares the same `loop` scenario and seeds with loop closure
+enabled and disabled. Run and plot it with:
+
+```bash
+python scripts/loop_closure_study.py run --seeds 0 1 2 --output experiments/studies/loop_closure.json
+python scripts/loop_closure_study.py plot experiments/studies/loop_closure.json --output experiments/plots/loop_closure_study.png
+```
+
+The JSON retains both individual results and scenario settings. This is a
+small, paired experiment on one route, not evidence of statistical significance
+or of online navigation improvement: the graph correction happens after driving.
+
+**Measured 23 November 2026**, seeds 0–2, 800 particles and 60 beams:
+
+| Loop closure | Trajectory RMS (m), mean ± sample std [min, max] | Map error (cells), mean ± sample std [min, max] |
+|---|---|---|
+| Disabled | 0.993 ± 0.023 [0.966, 1.008] | 257.3 ± 61.1 [213, 327] |
+| Enabled | 0.188 ± 0.024 [0.161, 0.207] | 69.3 ± 9.6 [59, 78] |
+
+All six runs reached the goal with zero collisions. In this scenario, enabling
+loop closure reduced the mean reconstructed trajectory and observed-surface map
+errors; these results do not establish performance on other routes. Raw results:
+`experiments/studies/loop_closure.json`.
+
+The second study tests localization with LiDAR range-noise standard deviations
+of 0.02, 0.10 and 0.30 m, keeping the route, filter settings and seeds fixed.
+The filter is not retuned for each noise level. Run and plot the recorded data:
+
+```bash
+python scripts/lidar_noise_study.py run --seeds 0 1 2 --output experiments/studies/lidar_noise.json
+python scripts/lidar_noise_study.py plot experiments/studies/lidar_noise.json --output experiments/plots/lidar_noise_study.png
+```
+
+**Measured 23 November 2026**, seeds 0–2, 800 particles and 60 beams:
+
+| LiDAR noise σ (m) | Filter position RMS (m), mean ± sample std [min, max] |
+|---|---|
+| 0.02 | 0.0845 ± 0.0004 [0.0842, 0.0849] |
+| 0.10 | 0.2451 ± 0.0013 [0.2439, 0.2465] |
+| 0.30 | 0.3860 ± 0.0088 [0.3767, 0.3942] |
+
+All nine runs reached the goal without collisions, while localization error
+increased with noise on this route. This small study does not establish a
+general failure threshold or statistical significance. Individual metrics and
+settings are retained in `experiments/studies/lidar_noise.json`.
 
 ### 5.1 Controlled comparisons
 

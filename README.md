@@ -22,6 +22,10 @@ project in Python (motion model, planning, control, sensing, localization).
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
 
+The next roadmap workstream, scientific evaluation, is in progress. Its first
+paired loop-closure study and reproduction commands are in
+`docs/roadmap.md` §5.
+
 Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
 map, so localization, detection, replanning and control run together. In the

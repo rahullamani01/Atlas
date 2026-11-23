@@ -1,0 +1,164 @@
+{
+  "scenario": {
+    "name": "localization",
+    "kind": "localization",
+    "world": "atlas.evaluation.scenarios.demo_world",
+    "prior_world": null,
+    "start": [
+      1.125,
+      1.125
+    ],
+    "goal": [
+      18.125,
+      18.125
+    ],
+    "goal_sequence": [],
+    "resolution": 0.25,
+    "inflation": 0.25,
+    "dt": 0.05,
+    "max_steps": 6000,
+    "controller": "pid",
+    "yaw_bias": 0.0,
+    "inject_step": null,
+    "inject_rect": null,
+    "kidnap_step": null,
+    "kidnap_pose": null,
+    "coverage_target": 0.95,
+    "lidar_sigma": 0.02,
+    "wheel_scale_left": 0.99,
+    "wheel_scale_right": 1.01,
+    "loop_closure": true,
+    "map_repair": true
+  },
+  "seeds": [
+    0,
+    1,
+    2
+  ],
+  "noise_levels": [
+    0.02,
+    0.1,
+    0.3
+  ],
+  "particles": 800,
+  "beams": 60,
+  "results": [
+    {
+      "seed": 0,
+      "lidar_sigma": 0.02,
+      "metrics": {
+        "odometry_rms": 11.394368292496337,
+        "odometry_max": 23.870702579017593,
+        "filter_rms": 0.08429296908749666,
+        "filter_max": 0.09865792237841792,
+        "filter_heading_rms_deg": 0.17872524206369791,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 0,
+      "lidar_sigma": 0.1,
+      "metrics": {
+        "odometry_rms": 11.670267674837499,
+        "odometry_max": 24.33809609143679,
+        "filter_rms": 0.24648230814223301,
+        "filter_max": 0.3063401125368839,
+        "filter_heading_rms_deg": 0.4354576481285468,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 0,
+      "lidar_sigma": 0.3,
+      "metrics": {
+        "odometry_rms": 11.779135476354307,
+        "odometry_max": 24.70518039844524,
+        "filter_rms": 0.3766691349273143,
+        "filter_max": 0.5044036502139722,
+        "filter_heading_rms_deg": 0.6438120718215951,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 1,
+      "lidar_sigma": 0.02,
+      "metrics": {
+        "odometry_rms": 11.37781737644297,
+        "odometry_max": 23.85651982298248,
+        "filter_rms": 0.08419503046057362,
+        "filter_max": 0.11955684737215952,
+        "filter_heading_rms_deg": 0.18634688528631532,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 1,
+      "lidar_sigma": 0.1,
+      "metrics": {
+        "odometry_rms": 11.513317550543993,
+        "odometry_max": 24.242483433866227,
+        "filter_rms": 0.24392129902168666,
+        "filter_max": 0.30078301284705417,
+        "filter_heading_rms_deg": 0.4207374431352078,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 1,
+      "lidar_sigma": 0.3,
+      "metrics": {
+        "odometry_rms": 11.68094476631654,
+        "odometry_max": 24.656700405799334,
+        "filter_rms": 0.39424500527803075,
+        "filter_max": 0.5199655601507356,
+        "filter_heading_rms_deg": 0.7816959304483336,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 2,
+      "lidar_sigma": 0.02,
+      "metrics": {
+        "odometry_rms": 11.376837058856967,
+        "odometry_max": 23.856103231251378,
+        "filter_rms": 0.0849264118669605,
+        "filter_max": 0.10333832336277116,
+        "filter_heading_rms_deg": 0.1784657686882641,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 2,
+      "lidar_sigma": 0.1,
+      "metrics": {
+        "odometry_rms": 11.564074307057279,
+        "odometry_max": 24.2504747944566,
+        "filter_rms": 0.24496438985954266,
+        "filter_max": 0.3147864071704159,
+        "filter_heading_rms_deg": 0.45000651771721517,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    },
+    {
+      "seed": 2,
+      "lidar_sigma": 0.3,
+      "metrics": {
+        "odometry_rms": 11.784911828594185,
+        "odometry_max": 24.733245145479348,
+        "filter_rms": 0.3869449352991617,
+        "filter_max": 0.4996320833255407,
+        "filter_heading_rms_deg": 0.6254094429432147,
+        "collisions": 0,
+        "reached": 1.0
+      }
+    }
+  ]
+}
