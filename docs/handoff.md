@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
 **Date:** 27 November 2026
-**Latest work:** Phase 14 — wheel-calibration sensitivity (scientific evaluation)
-**Verification:** 300 tests passed (`MPLBACKEND=Agg python -m pytest -q`, Python 3.14.4);
-pre-phase baseline 295 passed, including Phase 10.
+**Latest work:** Phase 15 — particle-filter beam budget (scientific evaluation)
+**Verification:** 305 tests passed (`MPLBACKEND=Agg python -m pytest -q`, Python 3.14.4);
+pre-phase baseline 300 passed, including Phase 10.
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -27,9 +27,12 @@ pre-phase baseline 295 passed, including Phase 10.
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
 | 14 | Paired wheel-calibration study on the localization route | complete |
+| 15 | Paired beam-budget study on the localization route | complete |
 
 Phase 14's five-seed measurements, settings, limitations and reproduction
 commands are in [the roadmap](roadmap.md#phase-14--wheel-calibration-error).
+Phase 15 retains all 20 drives, including the five two-return collisions;
+see the [paired comparison](roadmap.md#phase-15--particle-filter-beam-budget).
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
