@@ -275,6 +275,42 @@ increased with noise on this route. This small study does not establish a
 general failure threshold or statistical significance. Individual metrics and
 settings are retained in `experiments/studies/lidar_noise.json`.
 
+### Phase 14 — Wheel-calibration error
+
+How much does a fixed calibration error affect dead reckoning, and how much of
+that drift remains after scan correction? The `localization` runner drives on
+the particle-filter estimate and scores both estimators against simulator truth
+at each step. For each seed, the measured wheel speeds use left/right factors
+`1 − b` and `1 + b`; the simulator still drives the commanded wheels. The
+planned route, LiDAR noise (σ = 0.02 m), particle count (800), beam budget
+(60) and filter settings are held fixed. The actual trajectory can change
+across bias levels because the controller uses the estimate.
+
+| Per-wheel bias | Odometry position RMS (m) | Filter position RMS (m) | Paired difference (m) |
+|---|---:|---:|---:|
+| 0% | 0.000075 ± 0.000001 | 0.0823 ± 0.0010 | −0.0822 ± 0.0010 |
+| 1% | 11.390 ± 0.013 | 0.0844 ± 0.0003 | 11.306 ± 0.013 |
+| 3% | 21.796 ± 0.018 | 0.0902 ± 0.0007 | 21.706 ± 0.017 |
+
+Values are means ± sample standard deviations across seeds 0–4. The difference
+is odometry RMS minus filter RMS **within each drive**; positive values favour
+the filter. All 15 runs reached the goal with zero collisions. At 1% bias the
+per-seed metrics for seeds 0–2 match the nominal LiDAR study. See the
+[raw results and ranges](../experiments/studies/wheel_scale.json).
+
+With exact wheel calibration and a known initial pose, simulated dead reckoning
+has almost no drift; noisy scan correction does not improve on it. At both
+nonzero bias levels the filter keeps position RMS below 0.1 m on this route.
+This comparison does not test whether an odometry-driven controller would
+reach the goal, or establish a calibration tolerance for real robots.
+
+Reproduce the 15 simulations, then plot from the saved JSON:
+
+```bash
+python scripts/wheel_scale_study.py run --seeds 0 1 2 3 4 --output experiments/studies/wheel_scale.json
+MPLBACKEND=Agg python scripts/wheel_scale_study.py plot experiments/studies/wheel_scale.json --output experiments/plots/wheel_scale_study.png
+```
+
 ### 5.1 Controlled comparisons
 
 | Experiment | Comparison | Question |

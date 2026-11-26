@@ -21,10 +21,14 @@ project in Python (motion model, planning, control, sensing, localization).
 | 11 | Pose-graph SLAM and loop closure | complete |
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
+| 14 | Paired localization study under wheel-calibration error | complete |
 
-The next roadmap workstream, scientific evaluation, is in progress. Its first
-paired loop-closure study and reproduction commands are in
-`docs/roadmap.md` §5.
+Phase 14 measures odometry and particle-filter error on the same drives. With
+calibrated wheels, odometry was more accurate. With 1% opposing wheel-scale
+error, mean position RMS was `11.39 m` for odometry and `0.084 m` for the
+filter. All 15 drives across five seeds and three bias levels reached the goal
+without collisions. See the [experiment and reproduction commands](docs/roadmap.md#phase-14--wheel-calibration-error)
+and [per-run results](experiments/studies/wheel_scale.json).
 
 Phase 8 closed the loop on the estimated pose. The particle filter drives the
 supervisor, and the same estimate interprets LiDAR returns against the dynamic
@@ -78,7 +82,7 @@ the 95% observed-map target in `111 s`, visited `18.3` viewpoints, covered
 filter RMS and `340` cells of observed-surface map error.
 
 > **Verification note:** Phases 0-13 have been verified with their own tests,
-> demo and three-seed benchmark. The combined suite (290 tests) passes. Phase 10
+> demo and three-seed benchmark. Phase 10
 > now reports both a repair ratio (fraction of prior-error cells fixed) and a
 > net map-error count; see `docs/mathematics.md` §19.5-19.6 for why the net
 > count can rise above a near-perfect prior.
