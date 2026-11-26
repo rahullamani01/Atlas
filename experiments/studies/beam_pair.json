@@ -1,0 +1,194 @@
+{
+  "scenario": {
+    "name": "localization",
+    "kind": "localization",
+    "world": "atlas.evaluation.scenarios.demo_world",
+    "prior_world": null,
+    "start": [
+      1.125,
+      1.125
+    ],
+    "goal": [
+      18.125,
+      18.125
+    ],
+    "goal_sequence": [],
+    "resolution": 0.25,
+    "inflation": 0.25,
+    "dt": 0.05,
+    "max_steps": 6000,
+    "controller": "pid",
+    "yaw_bias": 0.0,
+    "inject_step": null,
+    "inject_rect": null,
+    "kidnap_step": null,
+    "kidnap_pose": null,
+    "coverage_target": 0.95,
+    "lidar_sigma": 0.02,
+    "wheel_scale_left": 0.99,
+    "wheel_scale_right": 1.01,
+    "loop_closure": true,
+    "map_repair": true
+  },
+  "particles": 800,
+  "beam_budget": 2,
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "results": [
+    {
+      "seed": 0,
+      "scan_order": {
+        "odometry_rms": 1.4163266945434874,
+        "odometry_max": 3.0342862191979254,
+        "filter_rms": 1.0111327282117675,
+        "filter_max": 2.379469529372612,
+        "filter_heading_rms_deg": 18.719317410956513,
+        "collisions": 1,
+        "reached": 0.0
+      },
+      "widest_pair": {
+        "odometry_rms": 1.491946740494005,
+        "odometry_max": 3.1920765583062654,
+        "filter_rms": 0.9035081383722336,
+        "filter_max": 2.1622568928871173,
+        "filter_heading_rms_deg": 17.743845701163774,
+        "collisions": 1,
+        "reached": 0.0
+      }
+    },
+    {
+      "seed": 1,
+      "scan_order": {
+        "odometry_rms": 1.3327961521648282,
+        "odometry_max": 2.8583651218558535,
+        "filter_rms": 1.0935604891128008,
+        "filter_max": 2.5115033666667004,
+        "filter_heading_rms_deg": 18.18711210319612,
+        "collisions": 1,
+        "reached": 0.0
+      },
+      "widest_pair": {
+        "odometry_rms": 1.5177929075801457,
+        "odometry_max": 3.303550518561759,
+        "filter_rms": 0.921023912850461,
+        "filter_max": 2.059561841256877,
+        "filter_heading_rms_deg": 16.331108257896364,
+        "collisions": 1,
+        "reached": 0.0
+      }
+    },
+    {
+      "seed": 2,
+      "scan_order": {
+        "odometry_rms": 1.6733809537692783,
+        "odometry_max": 3.6138541288162025,
+        "filter_rms": 0.7270291305817584,
+        "filter_max": 1.8191798330699396,
+        "filter_heading_rms_deg": 14.550358939521637,
+        "collisions": 1,
+        "reached": 0.0
+      },
+      "widest_pair": {
+        "odometry_rms": 1.5284363466335724,
+        "odometry_max": 3.2815221918062236,
+        "filter_rms": 0.8648830501755731,
+        "filter_max": 2.0600206333970124,
+        "filter_heading_rms_deg": 16.117989771210183,
+        "collisions": 1,
+        "reached": 0.0
+      }
+    },
+    {
+      "seed": 3,
+      "scan_order": {
+        "odometry_rms": 1.463834052858243,
+        "odometry_max": 3.1277266672522517,
+        "filter_rms": 0.9228986627693937,
+        "filter_max": 2.2896259379293924,
+        "filter_heading_rms_deg": 17.604132753040492,
+        "collisions": 1,
+        "reached": 0.0
+      },
+      "widest_pair": {
+        "odometry_rms": 1.454263767257607,
+        "odometry_max": 3.104026019854854,
+        "filter_rms": 0.9738665157238726,
+        "filter_max": 2.269785765583958,
+        "filter_heading_rms_deg": 17.351279577560764,
+        "collisions": 1,
+        "reached": 0.0
+      }
+    },
+    {
+      "seed": 4,
+      "scan_order": {
+        "odometry_rms": 1.4303436075840632,
+        "odometry_max": 3.0517986699063258,
+        "filter_rms": 0.9774018481688317,
+        "filter_max": 2.3660333620858447,
+        "filter_heading_rms_deg": 18.431142231602227,
+        "collisions": 1,
+        "reached": 0.0
+      },
+      "widest_pair": {
+        "odometry_rms": 1.46372862729833,
+        "odometry_max": 3.1552115550995548,
+        "filter_rms": 0.961877831309535,
+        "filter_max": 2.1857141784041723,
+        "filter_heading_rms_deg": 17.443854581131397,
+        "collisions": 1,
+        "reached": 0.0
+      }
+    }
+  ],
+  "summary": {
+    "scan_order": {
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.9464045717689105,
+        "std": 0.13737134102859402,
+        "minimum": 0.7270291305817584,
+        "maximum": 1.0935604891128008
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 17.498412687663397,
+        "std": 1.698315140411734,
+        "minimum": 14.550358939521637,
+        "maximum": 18.719317410956513
+      },
+      "goals_reached": 0,
+      "collisions": 5
+    },
+    "widest_pair": {
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.9250318896863352,
+        "std": 0.044270935041418484,
+        "minimum": 0.8648830501755731,
+        "maximum": 0.9738665157238726
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 16.997615577792498,
+        "std": 0.7244032780400029,
+        "minimum": 16.117989771210183,
+        "maximum": 17.743845701163774
+      },
+      "goals_reached": 0,
+      "collisions": 5
+    }
+  },
+  "paired_rms_delta_widest_minus_scan_order": {
+    "count": 5,
+    "mean": -0.021372682082575346,
+    "std": 0.12340014695195758,
+    "minimum": -0.17253657626233976,
+    "maximum": 0.13785391959381466
+  }
+}
