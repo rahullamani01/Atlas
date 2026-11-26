@@ -22,6 +22,13 @@ project in Python (motion model, planning, control, sensing, localization).
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
 | 14 | Paired localization study under wheel-calibration error | complete |
+| 15 | Localization with fewer LiDAR returns per filter update | complete |
+
+Phase 15 varies how many valid LiDAR returns the particle filter scores.
+With an eight-return budget, all five drives reached the goal, with mean
+position RMS of 0.106 m (60-return reference: 0.084 m). With two returns,
+all five collided before reaching the goal.
+[Protocol and results](docs/roadmap.md#phase-15--particle-filter-beam-budget).
 
 Phase 14 measures odometry and particle-filter error on the same drives. With
 calibrated wheels, odometry was more accurate. With 1% opposing wheel-scale

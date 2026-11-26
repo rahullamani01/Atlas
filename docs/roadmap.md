@@ -311,6 +311,44 @@ python scripts/wheel_scale_study.py run --seeds 0 1 2 3 4 --output experiments/s
 MPLBACKEND=Agg python scripts/wheel_scale_study.py plot experiments/studies/wheel_scale.json --output experiments/plots/wheel_scale_study.png
 ```
 
+### Phase 15 — Particle-filter beam budget
+
+Does localization still support navigation when the filter scores fewer valid
+returns from each scan? The 60-return reference uses Phase 14's 1% wheel bias
+(left/right scales 0.99/1.01), 800 particles and 0.02 m range noise on the
+`localization` route. Each budget uses the same five seeds (0–4). The simulated
+LiDAR still casts 360 rays. Only the maximum number of valid hits scored in
+each filter update changes; there is no sensor dropout or filter retuning.
+
+| Return budget | Position RMS (m) | Heading RMS (°) | Position RMS increase vs 60 (m) | Goals | Collisions |
+|---:|---:|---:|---:|---:|---:|
+| 60 | 0.0844 ± 0.0003 | 0.183 ± 0.004 | reference | 5/5 | 0 |
+| 20 | 0.0907 ± 0.0007 | 0.367 ± 0.011 | 0.0062 ± 0.0008 | 5/5 | 0 |
+| 8 | 0.1061 ± 0.0055 | 1.018 ± 0.050 | 0.0216 ± 0.0052 | 5/5 | 0 |
+| 2 | 0.9464 ± 0.1374 | 17.50 ± 1.70 | 0.8620 ± 0.1376 | 0/5 | 5 |
+
+Values are means ± sample standard deviations. Differences are computed
+against the same seed's 60-return run before averaging. All five reference
+runs exactly reproduced the corresponding Phase 14 metrics. The controller
+uses the estimate, so seed pairing does not hold the driven trajectory fixed.
+RMS includes every executed step up to arrival, collision or timeout; the
+two-return errors cover only the trajectory before and including the collision.
+
+On this route, reducing the budget from 60 to 20 cost about 6 mm in position
+RMS without a missed goal. At two returns the filter picks the first and last
+valid hit in scan order; those bearings can be close across the 360° scan
+boundary. Reducing the budget also reduces the number of likelihood terms in
+each update. These runs do not isolate either effect or establish a minimum
+safe beam count.
+
+[Raw per-seed results, configuration and ranges](../experiments/studies/beam_budget.json).
+Reproduce the simulations and plot from the recorded data:
+
+```bash
+python scripts/beam_budget_study.py run --seeds 0 1 2 3 4 --output experiments/studies/beam_budget.json
+MPLBACKEND=Agg python scripts/beam_budget_study.py plot experiments/studies/beam_budget.json --output experiments/plots/beam_budget.png
+```
+
 ### 5.1 Controlled comparisons
 
 | Experiment | Comparison | Question |
