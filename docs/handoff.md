@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 19 November 2026
-**Branch:** `main` (Phase 13 complete; Phase 10 verified)
-**Latest work:** Phase 10 verification and map-repair corrections
-**Tests:** 290 tests, all passing
+**Date:** 27 November 2026
+**Latest work:** Phase 14 — wheel-calibration sensitivity (scientific evaluation)
+**Verification:** 300 tests passed (`MPLBACKEND=Agg python -m pytest -q`, Python 3.14.4);
+pre-phase baseline 295 passed, including Phase 10.
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -26,6 +26,10 @@
 | 11 | Pose-graph SLAM and loop closure | complete |
 | 12 | Online pose-graph correction during navigation | complete |
 | 13 | Next-best-view exploration of an unknown map | complete |
+| 14 | Paired wheel-calibration study on the localization route | complete |
+
+Phase 14's five-seed measurements, settings, limitations and reproduction
+commands are in [the roadmap](roadmap.md#phase-14--wheel-calibration-error).
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an
