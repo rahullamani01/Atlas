@@ -40,6 +40,8 @@ class ParticleFilter:
         resample_position_noise: float = 0.005,
         resample_heading_noise: float = 0.003,
         seed: int | None = None,
+        *,
+        beam_selection: str = "scan_order",
     ) -> None:
         if n_particles < 1:
             raise ValueError("n_particles must be positive")
@@ -49,6 +51,10 @@ class ParticleFilter:
             raise ValueError("max_distance must be positive")
         if max_beams < 1:
             raise ValueError("max_beams must be positive")
+        if beam_selection not in ("scan_order", "widest_pair"):
+            raise ValueError("beam_selection must be 'scan_order' or 'widest_pair'")
+        if beam_selection == "widest_pair" and max_beams != 2:
+            raise ValueError("widest_pair requires max_beams=2")
         if likelihood_scale <= 0:
             raise ValueError("likelihood_scale must be positive")
         if min(alpha_v, alpha_w, sigma_v, sigma_w) < 0:
@@ -63,6 +69,7 @@ class ParticleFilter:
         self.sigma_v = sigma_v
         self.sigma_w = sigma_w
         self.max_beams = max_beams
+        self.beam_selection = beam_selection
         self.likelihood_scale = likelihood_scale
         self.resample_position_noise = resample_position_noise
         self.resample_heading_noise = resample_heading_noise
@@ -154,17 +161,37 @@ class ParticleFilter:
 
         self.particles = np.column_stack((x, y, theta_new))
 
+    def _selected_hits(self, scan: LidarScan) -> np.ndarray:
+        valid = np.flatnonzero(scan.hit_mask)
+        if len(valid) <= self.max_beams:
+            return valid
+        if self.beam_selection == "scan_order":
+            picks = np.linspace(0, len(valid) - 1, self.max_beams).round().astype(int)
+            return valid[picks]
+
+        # For each bearing, the best later partner is on either side of its
+        # antipode in sorted order. Minimize the deviation from pi over those
+        # pairs: equivalent to maximizing the smaller angle around the circle.
+        angles = scan.angles[valid] % (2 * math.pi)
+        order = np.argsort(angles, kind="stable")
+        angles = angles[order]
+        first = np.arange(len(angles) - 1)
+        target = angles[first] + math.pi
+        insertion = np.searchsorted(angles, target)
+        left = np.clip(insertion - 1, first + 1, len(angles) - 1)
+        right = np.clip(insertion, first + 1, len(angles) - 1)
+        partner = np.where(abs(angles[left] - target) <= abs(angles[right] - target), left, right)
+        best = np.argmin(abs(angles[partner] - target))
+        return valid[order[[best, partner[best]]]]
+
     def update(self, scan: LidarScan, resample: bool = True) -> None:
         """Reweight particles by how well they explain the scan."""
         if not self._initialized:
             raise RuntimeError("call initialize() before update()")
 
-        valid = np.flatnonzero(scan.hit_mask)
+        valid = self._selected_hits(scan)
         if len(valid) == 0:
             return
-        if len(valid) > self.max_beams:
-            picks = np.linspace(0, len(valid) - 1, self.max_beams).round().astype(int)
-            valid = valid[picks]
 
         ranges = scan.ranges[valid]
         angles = scan.angles[valid]
@@ -274,14 +301,9 @@ class ParticleFilter:
         if not self._initialized:
             raise RuntimeError("call initialize() first")
 
-        valid = np.flatnonzero(scan.hit_mask)
+        valid = self._selected_hits(scan)
         if len(valid) == 0:
             return 0.0
-        if len(valid) > self.max_beams:
-            picks = np.linspace(
-                0, len(valid) - 1, self.max_beams
-            ).round().astype(int)
-            valid = valid[picks]
 
         ranges = scan.ranges[valid]
         angles = scan.angles[valid]

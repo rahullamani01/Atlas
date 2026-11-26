@@ -349,6 +349,42 @@ python scripts/beam_budget_study.py run --seeds 0 1 2 3 4 --output experiments/s
 MPLBACKEND=Agg python scripts/beam_budget_study.py plot experiments/studies/beam_budget.json --output experiments/plots/beam_budget.png
 ```
 
+### Phase 16 — Choosing two returns
+
+Can changing the bearings scored by the filter rescue Phase 15's two-return
+runs? `scan_order` (the default) picks the first and last valid hit when the
+budget is two. The opt-in `widest_pair` policy picks the valid pair whose
+angular difference is closest to 180°, using body-frame bearings only.
+It sorts the bearings modulo 360° and checks the two neighbours of the
+opposite direction among later bearings for each candidate. This costs
+O(n log n) for n valid hits. With fewer than two hits both policies use all
+available hits. The measurement update and scan residual use the same selector.
+
+The `localization` runner used seeds 0–4, 800 particles, wheel scales
+0.99/1.01, 0.02 m range noise, and unchanged likelihood scale. Only the
+selection policy varied. All five `scan_order` runs exactly reproduced
+Phase 15's two-return metric dictionaries.
+
+| Selection | Position RMS (m) | Heading RMS (°) | Goals | Collisions |
+|---|---:|---:|---:|---:|
+| First and last valid hit | 0.946 ± 0.137 | 17.50 ± 1.70 | 0/5 | 5 |
+| Widest pair | 0.925 ± 0.044 | 17.00 ± 0.72 | 0/5 | 5 |
+
+Values are means ± sample standard deviations across seeds. The paired position
+RMS difference (widest minus scan order) was −0.021 ± 0.123 m, ranging from
+−0.173 to +0.138 m. Wider separation alone did not prevent a collision in
+any drive. Two opposite returns need not constrain independent pose errors,
+for example when they see parallel walls. The study did not measure which
+walls caused the failures. Each controller follows its own estimated pose;
+RMS is measured up to that drive's collision, not over identical trajectories.
+
+[Raw paired metrics and settings](../experiments/studies/beam_pair.json):
+
+```bash
+python scripts/beam_pair_study.py run --seeds 0 1 2 3 4 --output experiments/studies/beam_pair.json
+MPLBACKEND=Agg python scripts/beam_pair_study.py plot experiments/studies/beam_pair.json --output experiments/plots/beam_pair.png
+```
+
 ### 5.1 Controlled comparisons
 
 | Experiment | Comparison | Question |

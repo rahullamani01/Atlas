@@ -23,6 +23,13 @@ project in Python (motion model, planning, control, sensing, localization).
 | 13 | Next-best-view exploration of an unknown map | complete |
 | 14 | Paired localization study under wheel-calibration error | complete |
 | 15 | Localization with fewer LiDAR returns per filter update | complete |
+| 16 | Two-return localization: scan order vs widest angular separation | complete |
+
+Phase 16 tested one explanation for Phase 15's collisions: the first and last
+valid returns in a circular scan can point in nearly the same direction.
+Choosing the most widely separated pair instead still produced **five
+collisions in five drives** on the same route.
+[Paired results and reproduction commands](docs/roadmap.md#phase-16--choosing-two-returns).
 
 Phase 15 varies how many valid LiDAR returns the particle filter scores.
 With an eight-return budget, all five drives reached the goal, with mean

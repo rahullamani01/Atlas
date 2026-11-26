@@ -317,6 +317,8 @@ def run_localization(
     seed: int = 0,
     particles: int = 800,
     beams: int = 60,
+    *,
+    beam_selection: str = "scan_order",
 ) -> ScenarioResult:
     """Drive the route on the particle-filter estimate under wheel-scale error."""
     world, grid, _, path = _plan(scenario)
@@ -335,6 +337,7 @@ def run_localization(
         grid,
         n_particles=particles,
         max_beams=beams,
+        beam_selection=beam_selection,
         likelihood_scale=LIKELIHOOD_SCALE,
         seed=seed,
     )
