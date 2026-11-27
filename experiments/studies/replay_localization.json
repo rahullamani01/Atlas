@@ -1,0 +1,648 @@
+{
+  "scenario": {
+    "name": "localization",
+    "kind": "localization",
+    "world": "atlas.evaluation.scenarios.demo_world",
+    "prior_world": null,
+    "start": [
+      1.125,
+      1.125
+    ],
+    "goal": [
+      18.125,
+      18.125
+    ],
+    "goal_sequence": [],
+    "resolution": 0.25,
+    "inflation": 0.25,
+    "dt": 0.05,
+    "max_steps": 6000,
+    "controller": "pid",
+    "yaw_bias": 0.0,
+    "inject_step": null,
+    "inject_rect": null,
+    "kidnap_step": null,
+    "kidnap_pose": null,
+    "coverage_target": 0.95,
+    "lidar_sigma": 0.02,
+    "wheel_scale_left": 0.99,
+    "wheel_scale_right": 1.01,
+    "loop_closure": true,
+    "map_repair": true
+  },
+  "method": "replay",
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "particles": 800,
+  "beam_budget": 2,
+  "reference": {
+    "beam_selection": "scan_order",
+    "likelihood_scale": 0.2
+  },
+  "trajectories": [
+    {
+      "seed": 0,
+      "steps": 402,
+      "duration": 20.1,
+      "true_goal_distance": 15.401309932724368,
+      "collisions": 1,
+      "reached": 0.0,
+      "live_filter_rms": 1.0111327282117675,
+      "reference_replay_rms": 1.0111327282117675,
+      "reference_max_abs_difference": 0.0
+    },
+    {
+      "seed": 1,
+      "steps": 388,
+      "duration": 19.400000000000002,
+      "true_goal_distance": 15.525860924690193,
+      "collisions": 1,
+      "reached": 0.0,
+      "live_filter_rms": 1.0935604891128008,
+      "reference_replay_rms": 1.0935604891128008,
+      "reference_max_abs_difference": 0.0
+    },
+    {
+      "seed": 2,
+      "steps": 439,
+      "duration": 21.950000000000003,
+      "true_goal_distance": 14.907474972541626,
+      "collisions": 1,
+      "reached": 0.0,
+      "live_filter_rms": 0.7270291305817584,
+      "reference_replay_rms": 0.7270291305817584,
+      "reference_max_abs_difference": 0.0
+    },
+    {
+      "seed": 3,
+      "steps": 410,
+      "duration": 20.5,
+      "true_goal_distance": 15.329077946702562,
+      "collisions": 1,
+      "reached": 0.0,
+      "live_filter_rms": 0.9228986627693937,
+      "reference_replay_rms": 0.9228986627693937,
+      "reference_max_abs_difference": 0.0
+    },
+    {
+      "seed": 4,
+      "steps": 404,
+      "duration": 20.200000000000003,
+      "true_goal_distance": 15.380348318236944,
+      "collisions": 1,
+      "reached": 0.0,
+      "live_filter_rms": 0.9774018481688317,
+      "reference_replay_rms": 0.9774018481688317,
+      "reference_max_abs_difference": 0.0
+    }
+  ],
+  "results": [
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 1.0111327282117675,
+        "filter_max": 2.379469529372612,
+        "filter_heading_rms_deg": 18.719317410956513,
+        "steps": 402
+      },
+      "paired_rms_delta": 0.0,
+      "replay_matches_live": true
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 1.64747036090996,
+        "filter_max": 3.3788825091384496,
+        "filter_heading_rms_deg": 22.659994478681043,
+        "steps": 402
+      },
+      "paired_rms_delta": 0.6363376326981924,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 1.3910367744183472,
+        "filter_max": 2.929171131954745,
+        "filter_heading_rms_deg": 20.82262094944673,
+        "steps": 402
+      },
+      "paired_rms_delta": 0.3799040462065797,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 0.18084991368528042,
+        "filter_max": 0.3710464905768458,
+        "filter_heading_rms_deg": 3.3759282821786276,
+        "steps": 402
+      },
+      "paired_rms_delta": -0.8302828145264871,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 0.1553956617145905,
+        "filter_max": 0.3106733687318868,
+        "filter_heading_rms_deg": 3.073051339363244,
+        "steps": 402
+      },
+      "paired_rms_delta": -0.855737066497177,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 0,
+      "metrics": {
+        "filter_rms": 0.14205564232262624,
+        "filter_max": 0.3026387570761113,
+        "filter_heading_rms_deg": 2.4361276069630966,
+        "steps": 402
+      },
+      "paired_rms_delta": -0.8690770858891412,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 1.0935604891128008,
+        "filter_max": 2.5115033666667004,
+        "filter_heading_rms_deg": 18.18711210319612,
+        "steps": 388
+      },
+      "paired_rms_delta": 0.0,
+      "replay_matches_live": true
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 1.0954879654117164,
+        "filter_max": 2.469018821008961,
+        "filter_heading_rms_deg": 18.28779597306806,
+        "steps": 388
+      },
+      "paired_rms_delta": 0.0019274762989156535,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 0.7754500362340547,
+        "filter_max": 1.7598526686076044,
+        "filter_heading_rms_deg": 12.827551847389255,
+        "steps": 388
+      },
+      "paired_rms_delta": -0.31811045287874606,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 0.7551400179706373,
+        "filter_max": 1.7732790629233832,
+        "filter_heading_rms_deg": 15.951063282558346,
+        "steps": 388
+      },
+      "paired_rms_delta": -0.33842047114216345,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 0.1341757015311621,
+        "filter_max": 0.2730255318536708,
+        "filter_heading_rms_deg": 2.5196588087082143,
+        "steps": 388
+      },
+      "paired_rms_delta": -0.9593847875816387,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 1,
+      "metrics": {
+        "filter_rms": 0.11339868864452161,
+        "filter_max": 0.20570179777253503,
+        "filter_heading_rms_deg": 2.0695828940222305,
+        "steps": 388
+      },
+      "paired_rms_delta": -0.9801618004682792,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 0.7270291305817584,
+        "filter_max": 1.8191798330699396,
+        "filter_heading_rms_deg": 14.550358939521637,
+        "steps": 439
+      },
+      "paired_rms_delta": 0.0,
+      "replay_matches_live": true
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 1.4850396742337535,
+        "filter_max": 3.330101865030259,
+        "filter_heading_rms_deg": 23.05964687799317,
+        "steps": 439
+      },
+      "paired_rms_delta": 0.758010543651995,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 1.1274846626086714,
+        "filter_max": 2.5621040573601235,
+        "filter_heading_rms_deg": 17.810232993137763,
+        "steps": 439
+      },
+      "paired_rms_delta": 0.400455532026913,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 0.7916446528688313,
+        "filter_max": 1.8218240935998349,
+        "filter_heading_rms_deg": 15.082400841775677,
+        "steps": 439
+      },
+      "paired_rms_delta": 0.0646155222870729,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 0.09918802738499274,
+        "filter_max": 0.20836570694065165,
+        "filter_heading_rms_deg": 2.5654909051531747,
+        "steps": 439
+      },
+      "paired_rms_delta": -0.6278411031967657,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 2,
+      "metrics": {
+        "filter_rms": 0.07683425485459341,
+        "filter_max": 0.167798675626729,
+        "filter_heading_rms_deg": 1.9671436632105843,
+        "steps": 439
+      },
+      "paired_rms_delta": -0.6501948757271651,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.9228986627693937,
+        "filter_max": 2.2896259379293924,
+        "filter_heading_rms_deg": 17.604132753040492,
+        "steps": 410
+      },
+      "paired_rms_delta": 0.0,
+      "replay_matches_live": true
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.7249787173249176,
+        "filter_max": 1.7598291483925292,
+        "filter_heading_rms_deg": 14.06910302083436,
+        "steps": 410
+      },
+      "paired_rms_delta": -0.1979199454444761,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.7432721569058561,
+        "filter_max": 1.8001341329387532,
+        "filter_heading_rms_deg": 13.386538830759621,
+        "steps": 410
+      },
+      "paired_rms_delta": -0.17962650586353757,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.80569542964513,
+        "filter_max": 1.8979674750187328,
+        "filter_heading_rms_deg": 15.368209963757437,
+        "steps": 410
+      },
+      "paired_rms_delta": -0.11720323312426373,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.1358534744712087,
+        "filter_max": 0.2805280366639057,
+        "filter_heading_rms_deg": 2.980737313452598,
+        "steps": 410
+      },
+      "paired_rms_delta": -0.787045188298185,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 3,
+      "metrics": {
+        "filter_rms": 0.10224657772506181,
+        "filter_max": 0.26108020470973414,
+        "filter_heading_rms_deg": 2.362353200748399,
+        "steps": 410
+      },
+      "paired_rms_delta": -0.8206520850443318,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 0.9774018481688317,
+        "filter_max": 2.3660333620858447,
+        "filter_heading_rms_deg": 18.431142231602227,
+        "steps": 404
+      },
+      "paired_rms_delta": 0.0,
+      "replay_matches_live": true
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 1.2940050944191666,
+        "filter_max": 2.9027606147044693,
+        "filter_heading_rms_deg": 21.021846516971742,
+        "steps": 404
+      },
+      "paired_rms_delta": 0.31660324625033487,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 0.995308276424004,
+        "filter_max": 2.2741172587392486,
+        "filter_heading_rms_deg": 16.455195707331423,
+        "steps": 404
+      },
+      "paired_rms_delta": 0.017906428255172302,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 0.7900193228483247,
+        "filter_max": 1.862891691568571,
+        "filter_heading_rms_deg": 15.747683170111157,
+        "steps": 404
+      },
+      "paired_rms_delta": -0.18738252532050703,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 0.14267100351808598,
+        "filter_max": 0.2931894778482524,
+        "filter_heading_rms_deg": 2.8159723365648293,
+        "steps": 404
+      },
+      "paired_rms_delta": -0.8347308446507458,
+      "replay_matches_live": false
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 4,
+      "metrics": {
+        "filter_rms": 0.11106394378501308,
+        "filter_max": 0.2574798182342313,
+        "filter_heading_rms_deg": 2.3631914248713852,
+        "steps": 404
+      },
+      "paired_rms_delta": -0.8663379043838186,
+      "replay_matches_live": false
+    }
+  ],
+  "summary": [
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.9464045717689105,
+        "std": 0.13737134102859402,
+        "minimum": 0.7270291305817584,
+        "maximum": 1.0935604891128008
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 17.498412687663397,
+        "std": 1.698315140411734,
+        "minimum": 14.550358939521637,
+        "maximum": 18.719317410956513
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.0,
+        "std": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0
+      }
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "filter_rms": {
+        "count": 5,
+        "mean": 1.249396362459903,
+        "std": 0.3587068018603924,
+        "minimum": 0.7249787173249176,
+        "maximum": 1.64747036090996
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 19.819677373509677,
+        "std": 3.72242462341652,
+        "minimum": 14.06910302083436,
+        "maximum": 23.05964687799317
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.3029917906909924,
+        "std": 0.4061708619690547,
+        "minimum": -0.1979199454444761,
+        "maximum": 0.758010543651995
+      }
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "filter_rms": {
+        "count": 5,
+        "mean": 1.0065103813181868,
+        "std": 0.2670693059584831,
+        "minimum": 0.7432721569058561,
+        "maximum": 1.3910367744183472
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 16.26042806561296,
+        "std": 3.2900346548629247,
+        "minimum": 12.827551847389255,
+        "maximum": 20.82262094944673
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.060105809549276266,
+        "std": 0.3241946783028454,
+        "minimum": -0.31811045287874606,
+        "maximum": 0.400455532026913
+      }
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.6646698674036406,
+        "std": 0.27110417144032917,
+        "minimum": 0.18084991368528042,
+        "maximum": 0.80569542964513
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 13.105057108076249,
+        "std": 5.449103606310553,
+        "minimum": 3.3759282821786276,
+        "maximum": 15.951063282558346
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": -0.2817347043652697,
+        "std": 0.33913482700022185,
+        "minimum": -0.8302828145264871,
+        "maximum": 0.0646155222870729
+      }
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.13345677372400805,
+        "std": 0.020897516863689226,
+        "minimum": 0.09918802738499274,
+        "maximum": 0.1553956617145905
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 2.7909821406484125,
+        "std": 0.24528412917564302,
+        "minimum": 2.5196588087082143,
+        "maximum": 3.073051339363244
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": -0.8129477980449025,
+        "std": 0.1211245724326688,
+        "minimum": -0.9593847875816387,
+        "maximum": -0.6278411031967657
+      }
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.10911982146636323,
+        "std": 0.023433181081344928,
+        "minimum": 0.07683425485459341,
+        "maximum": 0.14205564232262624
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 2.239679757963139,
+        "std": 0.20742741433418196,
+        "minimum": 1.9671436632105843,
+        "maximum": 2.4361276069630966
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": -0.8372847503025472,
+        "std": 0.11994577582225005,
+        "minimum": -0.9801618004682792,
+        "maximum": -0.6501948757271651
+      }
+    }
+  ]
+}
