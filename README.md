@@ -24,6 +24,14 @@ project in Python (motion model, planning, control, sensing, localization).
 | 14 | Paired localization study under wheel-calibration error | complete |
 | 15 | Localization with fewer LiDAR returns per filter update | complete |
 | 16 | Two-return localization: scan order vs widest angular separation | complete |
+| 17 | Two-return likelihood weighting and true arrival distance | complete |
+
+Phase 17 tested whether giving two LiDAR returns more weight could recover
+navigation. With the widest pair, increasing the likelihood scale from 0.2
+to 6.0 lowered mean position RMS from 0.925 m to 0.128 m. Four of five
+drives still collided; the fifth reported arrival 0.218 m from the goal,
+outside the controller's 0.10 m tolerance when scored against truth.
+[Results and reproduction commands](docs/roadmap.md#phase-17--weighting-two-returns).
 
 Phase 16 tested one explanation for Phase 15's collisions: the first and last
 valid returns in a circular scan can point in nearly the same direction.

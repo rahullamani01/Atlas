@@ -1,0 +1,803 @@
+{
+  "scenario": {
+    "name": "localization",
+    "kind": "localization",
+    "world": "atlas.evaluation.scenarios.demo_world",
+    "prior_world": null,
+    "start": [
+      1.125,
+      1.125
+    ],
+    "goal": [
+      18.125,
+      18.125
+    ],
+    "goal_sequence": [],
+    "resolution": 0.25,
+    "inflation": 0.25,
+    "dt": 0.05,
+    "max_steps": 6000,
+    "controller": "pid",
+    "yaw_bias": 0.0,
+    "inject_step": null,
+    "inject_rect": null,
+    "kidnap_step": null,
+    "kidnap_pose": null,
+    "coverage_target": 0.95,
+    "lidar_sigma": 0.02,
+    "wheel_scale_left": 0.99,
+    "wheel_scale_right": 1.01,
+    "loop_closure": true,
+    "map_repair": true
+  },
+  "seeds": [
+    0,
+    1,
+    2,
+    3,
+    4
+  ],
+  "particles": 800,
+  "beam_budget": 2,
+  "reference_scale": 0.2,
+  "results": [
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 1.4163266945434874,
+        "odometry_max": 3.0342862191979254,
+        "filter_rms": 1.0111327282117675,
+        "filter_max": 2.379469529372612,
+        "filter_heading_rms_deg": 18.719317410956513,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.1,
+        "true_goal_distance": 15.401309932724368
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 1.3327961521648282,
+        "odometry_max": 2.8583651218558535,
+        "filter_rms": 1.0935604891128008,
+        "filter_max": 2.5115033666667004,
+        "filter_heading_rms_deg": 18.18711210319612,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 19.400000000000002,
+        "true_goal_distance": 15.525860924690193
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 1.6733809537692783,
+        "odometry_max": 3.6138541288162025,
+        "filter_rms": 0.7270291305817584,
+        "filter_max": 1.8191798330699396,
+        "filter_heading_rms_deg": 14.550358939521637,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 21.950000000000003,
+        "true_goal_distance": 14.907474972541626
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 1.463834052858243,
+        "odometry_max": 3.1277266672522517,
+        "filter_rms": 0.9228986627693937,
+        "filter_max": 2.2896259379293924,
+        "filter_heading_rms_deg": 17.604132753040492,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.5,
+        "true_goal_distance": 15.329077946702562
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 1.4303436075840632,
+        "odometry_max": 3.0517986699063258,
+        "filter_rms": 0.9774018481688317,
+        "filter_max": 2.3660333620858447,
+        "filter_heading_rms_deg": 18.431142231602227,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.200000000000003,
+        "true_goal_distance": 15.380348318236944
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 1.2972117022539704,
+        "odometry_max": 2.7780044148330476,
+        "filter_rms": 1.1840579956011368,
+        "filter_max": 2.58203764391152,
+        "filter_heading_rms_deg": 18.66277334093656,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 19.1,
+        "true_goal_distance": 15.603218853718827
+      },
+      "paired_rms_delta": 0.1729252673893693
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 1.3391121125981253,
+        "odometry_max": 2.8513351230903896,
+        "filter_rms": 1.0808881009866893,
+        "filter_max": 2.4977641754756337,
+        "filter_heading_rms_deg": 19.388601749707078,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 19.400000000000002,
+        "true_goal_distance": 15.508585328588197
+      },
+      "paired_rms_delta": -0.012672388126111489
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 1.0927263869226134,
+        "odometry_max": 2.384535045649057,
+        "filter_rms": 1.5193744551405526,
+        "filter_max": 3.1103541681930373,
+        "filter_heading_rms_deg": 22.428396069939023,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 17.35,
+        "true_goal_distance": 15.985780623476053
+      },
+      "paired_rms_delta": 0.7923453245587941
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 1.4957301188429641,
+        "odometry_max": 3.2090516831431253,
+        "filter_rms": 0.8875701490522427,
+        "filter_max": 2.180063562962014,
+        "filter_heading_rms_deg": 16.527998673307415,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.650000000000002,
+        "true_goal_distance": 15.223432130246826
+      },
+      "paired_rms_delta": -0.035328513717150956
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 1.3284292445256358,
+        "odometry_max": 2.8448761172701498,
+        "filter_rms": 1.1742318126287505,
+        "filter_max": 2.537155749941535,
+        "filter_heading_rms_deg": 19.28659052859869,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 19.3,
+        "true_goal_distance": 15.51980009136126
+      },
+      "paired_rms_delta": 0.19682996445991885
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 1.5384306632192404,
+        "odometry_max": 3.3214513724014045,
+        "filter_rms": 0.8653212710536198,
+        "filter_max": 1.9862163950950675,
+        "filter_heading_rms_deg": 14.890630880130734,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.8,
+        "true_goal_distance": 15.04376483009969
+      },
+      "paired_rms_delta": -0.1458114571581477
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 1.4024492367196315,
+        "odometry_max": 2.992198436572606,
+        "filter_rms": 1.0252284521741226,
+        "filter_max": 2.401441088775932,
+        "filter_heading_rms_deg": 17.838299386585277,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 19.950000000000003,
+        "true_goal_distance": 15.425349312587983
+      },
+      "paired_rms_delta": -0.06833203693867818
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 1.2416084349663417,
+        "odometry_max": 2.676856792168166,
+        "filter_rms": 1.2857635759960306,
+        "filter_max": 2.691223125278409,
+        "filter_heading_rms_deg": 18.431399157059875,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 18.6,
+        "true_goal_distance": 15.696242244423548
+      },
+      "paired_rms_delta": 0.5587344454142722
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 1.4219604553674845,
+        "odometry_max": 3.051172376309496,
+        "filter_rms": 1.0189902842901986,
+        "filter_max": 2.3246299347625463,
+        "filter_heading_rms_deg": 16.902315370171767,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.05,
+        "true_goal_distance": 15.338935047049487
+      },
+      "paired_rms_delta": 0.09609162152080486
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 1.2640771845037766,
+        "odometry_max": 2.7151322378000295,
+        "filter_rms": 1.2183869297493815,
+        "filter_max": 2.6351493451313686,
+        "filter_heading_rms_deg": 18.23449916790031,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 18.8,
+        "true_goal_distance": 15.633039444076802
+      },
+      "paired_rms_delta": 0.24098508158054976
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 1.491946740494005,
+        "odometry_max": 3.1920765583062654,
+        "filter_rms": 0.9035081383722336,
+        "filter_max": 2.1622568928871173,
+        "filter_heading_rms_deg": 17.743845701163774,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.5,
+        "true_goal_distance": 15.186812731171562
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 1.5177929075801457,
+        "odometry_max": 3.303550518561759,
+        "filter_rms": 0.921023912850461,
+        "filter_max": 2.059561841256877,
+        "filter_heading_rms_deg": 16.331108257896364,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.55,
+        "true_goal_distance": 15.046310670721747
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 1.5284363466335724,
+        "odometry_max": 3.2815221918062236,
+        "filter_rms": 0.8648830501755731,
+        "filter_max": 2.0600206333970124,
+        "filter_heading_rms_deg": 16.117989771210183,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.8,
+        "true_goal_distance": 15.117795181615989
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 1.454263767257607,
+        "odometry_max": 3.104026019854854,
+        "filter_rms": 0.9738665157238726,
+        "filter_max": 2.269785765583958,
+        "filter_heading_rms_deg": 17.351279577560764,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.25,
+        "true_goal_distance": 15.256239121477202
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 1.46372862729833,
+        "odometry_max": 3.1552115550995548,
+        "filter_rms": 0.961877831309535,
+        "filter_max": 2.1857141784041723,
+        "filter_heading_rms_deg": 17.443854581131397,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 20.25,
+        "true_goal_distance": 15.185166702581508
+      },
+      "paired_rms_delta": 0.0
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 2.5867599413377333,
+        "odometry_max": 5.756244825846895,
+        "filter_rms": 0.14202642490793332,
+        "filter_max": 0.3398312778227554,
+        "filter_heading_rms_deg": 3.0254504426256603,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 27.150000000000002,
+        "true_goal_distance": 13.42788509762219
+      },
+      "paired_rms_delta": -0.7614817134643004
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 2.751413108289017,
+        "odometry_max": 6.111269454272369,
+        "filter_rms": 0.14225277427838962,
+        "filter_max": 0.26365428571555266,
+        "filter_heading_rms_deg": 1.9894169811657747,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 28.0,
+        "true_goal_distance": 13.247093174773013
+      },
+      "paired_rms_delta": -0.7787711385720715
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 1.7367609589392354,
+        "odometry_max": 3.7560010549704916,
+        "filter_rms": 0.6726043511611419,
+        "filter_max": 1.5930345360105773,
+        "filter_heading_rms_deg": 12.158451815789567,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 22.150000000000002,
+        "true_goal_distance": 14.680570710126805
+      },
+      "paired_rms_delta": -0.19227869901443118
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 2.7064341559912415,
+        "odometry_max": 6.014274671293765,
+        "filter_rms": 0.13610849636425915,
+        "filter_max": 0.27329391716920814,
+        "filter_heading_rms_deg": 2.05808908579421,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 27.8,
+        "true_goal_distance": 13.295203679971324
+      },
+      "paired_rms_delta": -0.8377580193596135
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 2.8714488226624524,
+        "odometry_max": 6.367883804802156,
+        "filter_rms": 0.1138665324430649,
+        "filter_max": 0.18438494517297122,
+        "filter_heading_rms_deg": 1.9673884595293016,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 28.6,
+        "true_goal_distance": 13.12983445749583
+      },
+      "paired_rms_delta": -0.8480112988664701
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 0,
+      "metrics": {
+        "odometry_rms": 11.641772360101433,
+        "odometry_max": 24.34987539326121,
+        "filter_rms": 0.21371420719682602,
+        "filter_max": 0.3875963152315237,
+        "filter_heading_rms_deg": 1.2537368518360381,
+        "collisions": 0,
+        "reached": 1.0,
+        "duration": 59.6,
+        "true_goal_distance": 0.21830455284687103
+      },
+      "paired_rms_delta": -0.6897939311754077
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 1,
+      "metrics": {
+        "odometry_rms": 2.992523131711372,
+        "odometry_max": 6.6235559770315025,
+        "filter_rms": 0.09624797493023779,
+        "filter_max": 0.17763378361400087,
+        "filter_heading_rms_deg": 1.3377488993292561,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 29.200000000000003,
+        "true_goal_distance": 13.02231538938369
+      },
+      "paired_rms_delta": -0.8247759379202233
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 2,
+      "metrics": {
+        "odometry_rms": 2.712365407759358,
+        "odometry_max": 6.0293409242794045,
+        "filter_rms": 0.10880854169626213,
+        "filter_max": 0.2492262320292427,
+        "filter_heading_rms_deg": 1.4104490067976834,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 27.75,
+        "true_goal_distance": 13.27418703713909
+      },
+      "paired_rms_delta": -0.756074508479311
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 3,
+      "metrics": {
+        "odometry_rms": 2.6790125387315893,
+        "odometry_max": 5.963592785296186,
+        "filter_rms": 0.11206475415623979,
+        "filter_max": 0.27249955545183124,
+        "filter_heading_rms_deg": 1.4475289870261523,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 27.6,
+        "true_goal_distance": 13.311339681270425
+      },
+      "paired_rms_delta": -0.8618017615676328
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "seed": 4,
+      "metrics": {
+        "odometry_rms": 2.7500390143035656,
+        "odometry_max": 6.108012317885505,
+        "filter_rms": 0.11019563332329844,
+        "filter_max": 0.23023643820474515,
+        "filter_heading_rms_deg": 1.4431461535525445,
+        "collisions": 1,
+        "reached": 0.0,
+        "duration": 28.0,
+        "true_goal_distance": 13.24863445099297
+      },
+      "paired_rms_delta": -0.8516821979862366
+    }
+  ],
+  "summary": [
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.2,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.9464045717689105,
+        "std": 0.13737134102859402,
+        "minimum": 0.7270291305817584,
+        "maximum": 1.0935604891128008
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 17.498412687663397,
+        "std": 1.698315140411734,
+        "minimum": 14.550358939521637,
+        "maximum": 18.719317410956513
+      },
+      "duration": {
+        "count": 5,
+        "mean": 20.43,
+        "std": 0.9404786015641188,
+        "minimum": 19.400000000000002,
+        "maximum": 21.950000000000003
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 15.30881441897914,
+        "std": 0.23572529895514244,
+        "minimum": 14.907474972541626,
+        "maximum": 15.525860924690193
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.0,
+        "std": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0
+      },
+      "goals_reported": 0,
+      "collisions": 5
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 0.8,
+      "filter_rms": {
+        "count": 5,
+        "mean": 1.1692245026818744,
+        "std": 0.2291192864289709,
+        "minimum": 0.8875701490522427,
+        "maximum": 1.5193744551405526
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 19.258872072497756,
+        "std": 2.114029546416499,
+        "minimum": 16.527998673307415,
+        "maximum": 22.428396069939023
+      },
+      "duration": {
+        "count": 5,
+        "mean": 19.16,
+        "std": 1.1807836380980221,
+        "minimum": 17.35,
+        "maximum": 20.650000000000002
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 15.568163405478234,
+        "std": 0.2740261094953144,
+        "minimum": 15.223432130246826,
+        "maximum": 15.985780623476053
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.22281993091296398,
+        "std": 0.3352690641869416,
+        "minimum": -0.035328513717150956,
+        "maximum": 0.7923453245587941
+      },
+      "goals_reported": 0,
+      "collisions": 5
+    },
+    {
+      "beam_selection": "scan_order",
+      "likelihood_scale": 6.0,
+      "filter_rms": {
+        "count": 5,
+        "mean": 1.0827381026526708,
+        "std": 0.1690126992460317,
+        "minimum": 0.8653212710536198,
+        "maximum": 1.2857635759960306
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 17.259428792369594,
+        "std": 1.4489739027272475,
+        "minimum": 14.890630880130734,
+        "maximum": 18.431399157059875
+      },
+      "duration": {
+        "count": 5,
+        "mean": 19.64,
+        "std": 0.9215476113581977,
+        "minimum": 18.6,
+        "maximum": 20.8
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 15.427466175647501,
+        "std": 0.2596006106766042,
+        "minimum": 15.04376483009969,
+        "maximum": 15.696242244423548
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.13633353088376018,
+        "std": 0.27950298739811413,
+        "minimum": -0.1458114571581477,
+        "maximum": 0.5587344454142722
+      },
+      "goals_reported": 0,
+      "collisions": 5
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.2,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.9250318896863352,
+        "std": 0.044270935041418484,
+        "minimum": 0.8648830501755731,
+        "maximum": 0.9738665157238726
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 16.997615577792498,
+        "std": 0.7244032780400029,
+        "minimum": 16.117989771210183,
+        "maximum": 17.743845701163774
+      },
+      "duration": {
+        "count": 5,
+        "mean": 20.47,
+        "std": 0.23075961518428684,
+        "minimum": 20.25,
+        "maximum": 20.8
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 15.1584648815136,
+        "std": 0.07954398361463036,
+        "minimum": 15.046310670721747,
+        "maximum": 15.256239121477202
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": 0.0,
+        "std": 0.0,
+        "minimum": 0.0,
+        "maximum": 0.0
+      },
+      "goals_reported": 0,
+      "collisions": 5
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 0.8,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.2413717158309578,
+        "std": 0.24134702936858987,
+        "minimum": 0.1138665324430649,
+        "maximum": 0.6726043511611419
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 4.239759356980903,
+        "std": 4.448809724882317,
+        "minimum": 1.9673884595293016,
+        "maximum": 12.158451815789567
+      },
+      "duration": {
+        "count": 5,
+        "mean": 26.740000000000002,
+        "std": 2.617584764625588,
+        "minimum": 22.150000000000002,
+        "maximum": 28.6
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 13.556117423997833,
+        "std": 0.6375985920182451,
+        "minimum": 13.12983445749583,
+        "maximum": 14.680570710126805
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": -0.6836601738553773,
+        "std": 0.277180212016824,
+        "minimum": -0.8480112988664701,
+        "maximum": -0.19227869901443118
+      },
+      "goals_reported": 0,
+      "collisions": 5
+    },
+    {
+      "beam_selection": "widest_pair",
+      "likelihood_scale": 6.0,
+      "filter_rms": {
+        "count": 5,
+        "mean": 0.12820622226057282,
+        "std": 0.04820306882863133,
+        "minimum": 0.09624797493023779,
+        "maximum": 0.21371420719682602
+      },
+      "filter_heading_rms_deg": {
+        "count": 5,
+        "mean": 1.3785219797083348,
+        "std": 0.08244901179589147,
+        "minimum": 1.2537368518360381,
+        "maximum": 1.4475289870261523
+      },
+      "duration": {
+        "count": 5,
+        "mean": 34.43,
+        "std": 14.084548271066417,
+        "minimum": 27.6,
+        "maximum": 59.6
+      },
+      "true_goal_distance": {
+        "count": 5,
+        "mean": 10.614956222326608,
+        "std": 5.813002610354971,
+        "minimum": 0.21830455284687103,
+        "maximum": 13.311339681270425
+      },
+      "paired_rms_delta": {
+        "count": 5,
+        "mean": -0.7968256674257622,
+        "std": 0.07267874327481079,
+        "minimum": -0.8618017615676328,
+        "maximum": -0.6897939311754077
+      },
+      "goals_reported": 1,
+      "collisions": 4
+    }
+  ]
+}

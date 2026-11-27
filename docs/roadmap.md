@@ -385,6 +385,47 @@ python scripts/beam_pair_study.py run --seeds 0 1 2 3 4 --output experiments/stu
 MPLBACKEND=Agg python scripts/beam_pair_study.py plot experiments/studies/beam_pair.json --output experiments/plots/beam_pair.png
 ```
 
+### Phase 17 — Weighting two returns
+
+Phase 16 held the filter's likelihood scale fixed. Does weighting the same
+two hits more strongly change localization or navigation? The filter adds
+`−scale / 2 × Σ(distance / measurement_sigma)²` to each particle's log weight.
+At a two-hit budget, scales 0.8 and 6.0 give the sum the same total coefficient
+as 8 and 60 equally weighted hits at the reference scale of 0.2, respectively,
+if their mean squared residuals are equal. Multiplying a residual does not
+supply the geometry of additional measurements.
+
+Both Phase 16 selectors ran at all three scales: five seeds (0–4), 800
+particles, wheel scales 0.99/1.01, LiDAR range noise 0.02 m. The ten runs at
+0.2 exactly reproduced the previously recorded localization metrics. In this
+study the runner additionally scores elapsed simulated time and distance from
+the **true final pose** to the last planned waypoint. Neither drives control.
+
+| Selector | Scale | Position RMS (m), mean ± sample SD | Heading RMS (°), mean | Simulated time (s), mean | Final true goal distance (m), mean | Reported arrivals | Collisions |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Scan order | 0.2 | 0.946 ± 0.137 | 17.50 | 20.43 | 15.31 | 0/5 | 5 |
+| Scan order | 0.8 | 1.169 ± 0.229 | 19.26 | 19.16 | 15.57 | 0/5 | 5 |
+| Scan order | 6.0 | 1.083 ± 0.169 | 17.26 | 19.64 | 15.43 | 0/5 | 5 |
+| Widest pair | 0.2 | 0.925 ± 0.044 | 17.00 | 20.47 | 15.16 | 0/5 | 5 |
+| Widest pair | 0.8 | 0.241 ± 0.241 | 4.24 | 26.74 | 13.56 | 0/5 | 5 |
+| Widest pair | 6.0 | 0.128 ± 0.048 | 1.38 | 34.43 | 10.61 | 1/5 | 4 |
+
+At 6.0 the widest-pair RMS dropped on all five seeds: paired change vs 0.2
+was −0.797 ± 0.073 m. For scan order the mean change was +0.136 ± 0.280 m.
+The only controller-reported arrival (widest pair, 6.0, seed 0) ended 0.218 m
+from the goal. None of the 30 final true poses met the 0.10 m arrival
+tolerance. These runs cover one route, with RMS measured until each drive
+stopped. They support a selector-dependent effect on localization, not a
+general tuning recommendation; the default remains 0.2.
+
+[Per-seed results, paired differences and ranges](../experiments/studies/likelihood_scale.json).
+Reproduce the experiment and plot final goal distance from recorded results:
+
+```bash
+python scripts/likelihood_scale_study.py run --seeds 0 1 2 3 4 --output experiments/studies/likelihood_scale.json
+MPLBACKEND=Agg python scripts/likelihood_scale_study.py plot experiments/studies/likelihood_scale.json --output experiments/plots/likelihood_scale.png
+```
+
 ### 5.1 Controlled comparisons
 
 | Experiment | Comparison | Question |
