@@ -1,9 +1,9 @@
 # Handoff — Project ATLAS
 
-**Date:** 27 November 2026
-**Latest work:** Phase 16 — two-return selection for localization (scientific evaluation)
-**Verification:** 316 tests passed (`MPLBACKEND=Agg python -m pytest -q`, Python 3.14.4);
-pre-phase baseline 305 passed, including Phase 10.
+**Date:** 28 November 2026
+**Latest work:** Phase 17 — likelihood weighting for two-return localization
+**Verification:** 322 tests passed (`MPLBACKEND=Agg python -m pytest -q`, Python 3.14.4);
+pre-phase baseline 316 passed, including Phase 10.
 **Repository:** https://github.com/rahullamani01/Atlas
 
 ---
@@ -29,6 +29,7 @@ pre-phase baseline 305 passed, including Phase 10.
 | 14 | Paired wheel-calibration study on the localization route | complete |
 | 15 | Paired beam-budget study on the localization route | complete |
 | 16 | Paired two-return selection study on the localization route | complete |
+| 17 | Paired two-return likelihood scales and true goal distance | complete |
 
 Phase 14's five-seed measurements, settings, limitations and reproduction
 commands are in [the roadmap](roadmap.md#phase-14--wheel-calibration-error).
@@ -36,6 +37,8 @@ Phase 15 retains all 20 drives, including the five two-return collisions;
 see the [paired comparison](roadmap.md#phase-15--particle-filter-beam-budget).
 Phase 16 reproduced those five collisions and recorded five more with the
 widest-pair selector; see the [selector comparison](roadmap.md#phase-16--choosing-two-returns).
+Phase 17 varied likelihood scale for both selectors and scored the true final
+pose separately from the controller's arrival flag; see the [30-run comparison](roadmap.md#phase-17--weighting-two-returns).
 
 The system can model a differential-drive robot, simulate its motion in a 2D
 world with obstacles, rasterise that world into an occupancy grid, plan an

@@ -319,8 +319,12 @@ def run_localization(
     beams: int = 60,
     *,
     beam_selection: str = "scan_order",
+    likelihood_scale: float = LIKELIHOOD_SCALE,
+    include_drive_metrics: bool = False,
 ) -> ScenarioResult:
-    """Drive the route on the particle-filter estimate under wheel-scale error."""
+    """Drive on the filter estimate. Optionally report elapsed simulation time
+    and the final truth-to-goal distance, including drives that end early.
+    """
     world, grid, _, path = _plan(scenario)
     robot = DifferentialDriveRobot(pose=_start_pose(path))
     follower = PathFollower(heading_pid=_heading_pid("pid"))
@@ -338,7 +342,7 @@ def run_localization(
         n_particles=particles,
         max_beams=beams,
         beam_selection=beam_selection,
-        likelihood_scale=LIKELIHOOD_SCALE,
+        likelihood_scale=likelihood_scale,
         seed=seed,
     )
     pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
@@ -387,7 +391,11 @@ def run_localization(
         collisions=sim.collision_count,
         reached=follower.goal_reached,
     )
-    return ScenarioResult(scenario.name, seed, metrics.as_dict())
+    values = metrics.as_dict()
+    if include_drive_metrics:
+        values["duration"] = len(filter_errors) * scenario.dt
+        values["true_goal_distance"] = math.dist((robot.pose.x, robot.pose.y), path[-1])
+    return ScenarioResult(scenario.name, seed, values)
 
 
 def run_recovery(scenario: Scenario, seed: int = 0) -> ScenarioResult:
