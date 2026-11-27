@@ -55,8 +55,8 @@ class ParticleFilter:
             raise ValueError("beam_selection must be 'scan_order' or 'widest_pair'")
         if beam_selection == "widest_pair" and max_beams != 2:
             raise ValueError("widest_pair requires max_beams=2")
-        if likelihood_scale <= 0:
-            raise ValueError("likelihood_scale must be positive")
+        if not math.isfinite(likelihood_scale) or likelihood_scale <= 0:
+            raise ValueError("likelihood_scale must be finite and positive")
         if min(alpha_v, alpha_w, sigma_v, sigma_w) < 0:
             raise ValueError("noise parameters must be non-negative")
 
