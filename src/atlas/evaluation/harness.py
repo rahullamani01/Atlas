@@ -41,7 +41,7 @@ from atlas.planning import OccupancyGrid, a_star, dijkstra
 from atlas.recovery import NavEvent, NavigationSupervisor, nearest_free_cell
 from atlas.robot.differential_drive import DifferentialDriveRobot, Pose
 from atlas.robot.odometry import Odometry
-from atlas.sensors import Lidar
+from atlas.sensors import Lidar, LidarScan
 from atlas.simulation.simulator import Simulator
 from atlas.simulation.world import RectObstacle
 from atlas.slam import LoopEvent, PoseGraphSlam
@@ -312,19 +312,69 @@ def run_tracking(scenario: Scenario, seed: int = 0) -> ScenarioResult:
     return ScenarioResult(scenario.name, seed, metrics.as_dict())
 
 
-def run_localization(
-    scenario: Scenario,
-    seed: int = 0,
-    particles: int = 800,
-    beams: int = 60,
-    *,
-    beam_selection: str = "scan_order",
-    likelihood_scale: float = LIKELIHOOD_SCALE,
-    include_drive_metrics: bool = False,
-) -> ScenarioResult:
-    """Drive on the filter estimate. Optionally report elapsed simulation time
-    and the final truth-to-goal distance, including drives that end early.
+@dataclass(frozen=True)
+class LocalizationRecord:
+    """Wheel commands, scans and true poses from one closed-loop drive.
+
+    A replay consumes exactly these observations and scores against the same
+    true poses, so several filter settings share one trajectory and horizon.
     """
+
+    scenario: str
+    seed: int
+    beam_selection: str
+    likelihood_scale: float
+    particles: int
+    beams: int
+    start_pose: tuple[float, float, float]
+    angles: np.ndarray
+    body_origin: tuple[float, float]
+    max_range: float
+    wheel_left: np.ndarray
+    wheel_right: np.ndarray
+    ranges: np.ndarray
+    true_poses: np.ndarray
+    collisions: int
+    reached: bool
+    duration: float
+    true_goal_distance: float
+    live_metrics: dict[str, float | int]
+
+
+@dataclass(frozen=True)
+class ReplayMetrics:
+    """Filter error over a recorded trajectory; the drive itself is fixed."""
+
+    filter_rms: float
+    filter_max: float
+    filter_heading_rms_deg: float
+    steps: int
+
+    def as_dict(self) -> dict[str, float | int]:
+        return {
+            "filter_rms": self.filter_rms,
+            "filter_max": self.filter_max,
+            "filter_heading_rms_deg": self.filter_heading_rms_deg,
+            "steps": self.steps,
+        }
+
+
+def _drive_localization(
+    scenario: Scenario,
+    seed: int,
+    particles: int,
+    beams: int,
+    beam_selection: str,
+    likelihood_scale: float,
+    capture: bool,
+) -> tuple[
+    LocalizationMetrics,
+    DifferentialDriveRobot,
+    list[tuple[float, float]],
+    int,
+    dict | None,
+]:
+    """Drive on the filter estimate, optionally retaining replay inputs."""
     world, grid, _, path = _plan(scenario)
     robot = DifferentialDriveRobot(pose=_start_pose(path))
     follower = PathFollower(heading_pid=_heading_pid("pid"))
@@ -347,6 +397,19 @@ def run_localization(
     )
     pf.initialize(robot.pose, position_std=0.10, heading_std=0.05)
 
+    data = None
+    if capture:
+        data = {
+            "start_pose": (robot.pose.x, robot.pose.y, robot.pose.theta),
+            "angles": lidar.angles.copy(),
+            "body_origin": lidar.mount_offset,
+            "max_range": lidar.max_range,
+            "wheel_left": [],
+            "wheel_right": [],
+            "ranges": [],
+            "poses": [],
+        }
+
     odometry_errors: list[float] = []
     filter_errors: list[float] = []
     heading_errors: list[float] = []
@@ -362,7 +425,8 @@ def run_localization(
         odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
         v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
         pf.predict(v_hat, w_hat, scenario.dt)
-        pf.update(lidar.scan(world, robot.pose))
+        scan = lidar.scan(world, robot.pose)
+        pf.update(scan)
 
         estimate = pf.estimate()
         odometry_errors.append(math.hypot(
@@ -379,6 +443,14 @@ def run_localization(
             )
         ))
 
+        if data is not None:
+            data["wheel_left"].append(wheel_l)
+            data["wheel_right"].append(wheel_r)
+            data["ranges"].append(scan.ranges.copy())
+            data["poses"].append(
+                (robot.pose.x, robot.pose.y, robot.pose.theta)
+            )
+
         if not ok or follower.goal_reached:
             break
 
@@ -391,11 +463,151 @@ def run_localization(
         collisions=sim.collision_count,
         reached=follower.goal_reached,
     )
+    return metrics, robot, path, len(filter_errors), data
+
+
+def run_localization(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+    *,
+    beam_selection: str = "scan_order",
+    likelihood_scale: float = LIKELIHOOD_SCALE,
+    include_drive_metrics: bool = False,
+) -> ScenarioResult:
+    """Drive on the filter estimate. Optionally report elapsed simulation time
+    and the final truth-to-goal distance, including drives that end early.
+    """
+    metrics, robot, path, steps, _ = _drive_localization(
+        scenario, seed, particles, beams, beam_selection, likelihood_scale,
+        capture=False,
+    )
     values = metrics.as_dict()
     if include_drive_metrics:
-        values["duration"] = len(filter_errors) * scenario.dt
-        values["true_goal_distance"] = math.dist((robot.pose.x, robot.pose.y), path[-1])
+        values["duration"] = steps * scenario.dt
+        values["true_goal_distance"] = math.dist(
+            (robot.pose.x, robot.pose.y), path[-1]
+        )
     return ScenarioResult(scenario.name, seed, values)
+
+
+def record_localization_drive(
+    scenario: Scenario,
+    seed: int = 0,
+    particles: int = 800,
+    beams: int = 60,
+    *,
+    beam_selection: str = "scan_order",
+    likelihood_scale: float = LIKELIHOOD_SCALE,
+) -> LocalizationRecord:
+    """Drive once and retain the wheel commands, scans and true poses."""
+    metrics, robot, path, steps, data = _drive_localization(
+        scenario, seed, particles, beams, beam_selection, likelihood_scale,
+        capture=True,
+    )
+    if data is None:
+        raise RuntimeError("replay capture was not initialized")
+    return LocalizationRecord(
+        scenario=scenario.name,
+        seed=seed,
+        beam_selection=beam_selection,
+        likelihood_scale=likelihood_scale,
+        particles=particles,
+        beams=beams,
+        start_pose=data["start_pose"],
+        angles=np.asarray(data["angles"], dtype=float),
+        body_origin=tuple(data["body_origin"]),
+        max_range=float(data["max_range"]),
+        wheel_left=np.asarray(data["wheel_left"], dtype=float),
+        wheel_right=np.asarray(data["wheel_right"], dtype=float),
+        ranges=np.asarray(data["ranges"], dtype=float),
+        true_poses=np.asarray(data["poses"], dtype=float),
+        collisions=metrics.collisions,
+        reached=metrics.reached,
+        duration=steps * scenario.dt,
+        true_goal_distance=math.dist(
+            (robot.pose.x, robot.pose.y), path[-1]
+        ),
+        live_metrics=metrics.as_dict(),
+    )
+
+
+def replay_localization(
+    scenario: Scenario,
+    record: LocalizationRecord,
+    particles: int = 800,
+    beams: int = 60,
+    *,
+    beam_selection: str = "scan_order",
+    likelihood_scale: float = LIKELIHOOD_SCALE,
+) -> ScenarioResult:
+    """Score a filter setting on a recorded drive without changing its motion."""
+    steps = int(record.wheel_left.size)
+    if steps == 0:
+        raise ValueError("recording has no steps")
+    if (
+        record.wheel_right.size != steps
+        or record.ranges.shape[0] != steps
+        or record.true_poses.shape[0] != steps
+    ):
+        raise ValueError("recording arrays must have equal lengths")
+    if record.ranges.ndim != 2 or record.ranges.shape[1] != record.angles.size:
+        raise ValueError("recorded ranges must match the scan angles")
+
+    _, grid, _, _ = _plan(scenario)
+    pf = ParticleFilter(
+        grid,
+        n_particles=particles,
+        max_beams=beams,
+        beam_selection=beam_selection,
+        likelihood_scale=likelihood_scale,
+        seed=record.seed,
+    )
+    start = Pose(*record.start_pose)
+    pf.initialize(start, position_std=0.10, heading_std=0.05)
+    odometry = Odometry(
+        left_scale=scenario.wheel_scale_left,
+        right_scale=scenario.wheel_scale_right,
+    )
+    odometry.reset(Pose(start.x, start.y, start.theta))
+
+    filter_errors: list[float] = []
+    heading_errors: list[float] = []
+    for index in range(steps):
+        wheel_l = float(record.wheel_left[index])
+        wheel_r = float(record.wheel_right[index])
+        odometry.update_wheels(wheel_l, wheel_r, scenario.dt)
+        v_hat, w_hat = odometry.wheel_speeds_to_twist(wheel_l, wheel_r)
+        pf.predict(v_hat, w_hat, scenario.dt)
+
+        true_x, true_y, true_theta = record.true_poses[index]
+        scan = LidarScan(
+            ranges=record.ranges[index].copy(),
+            angles=record.angles.copy(),
+            world_angles=record.angles + true_theta,
+            origin=(float(true_x), float(true_y)),
+            max_range=record.max_range,
+            body_origin=record.body_origin,
+        )
+        pf.update(scan)
+
+        estimate = pf.estimate()
+        filter_errors.append(
+            math.hypot(estimate.x - true_x, estimate.y - true_y)
+        )
+        heading_errors.append(abs(math.atan2(
+            math.sin(estimate.theta - true_theta),
+            math.cos(estimate.theta - true_theta),
+        )))
+
+    metrics = ReplayMetrics(
+        filter_rms=rms(filter_errors),
+        filter_max=max(filter_errors),
+        filter_heading_rms_deg=math.degrees(rms(heading_errors)),
+        steps=steps,
+    )
+    return ScenarioResult(scenario.name, record.seed, metrics.as_dict())
 
 
 def run_recovery(scenario: Scenario, seed: int = 0) -> ScenarioResult:

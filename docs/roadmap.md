@@ -426,6 +426,76 @@ python scripts/likelihood_scale_study.py run --seeds 0 1 2 3 4 --output experime
 MPLBACKEND=Agg python scripts/likelihood_scale_study.py plot experiments/studies/likelihood_scale.json --output experiments/plots/likelihood_scale.png
 ```
 
+### Phase 18 — Replaying one drive through every filter
+
+Phase 17's filter settings changed the closed-loop route, because the
+controller followed each filter's estimate. Its RMS differences therefore
+mixed estimator quality with different trajectories, stopping times and
+scoring horizons. Phase 18 holds the drive fixed: record one drive per seed
+with the default filter, then replay its wheel commands and LiDAR scans
+through every selector and scale. A replay never commands the robot again; it
+only predicts, updates and scores the filter against the recorded true poses.
+Every setting therefore sees identical observations over an identical horizon.
+
+The recording source was `scan_order` at likelihood scale 0.2 (the current
+default): five seeds (0–4), 800 particles, a two-hit budget, wheel scales
+0.99/1.01 and 0.02 m LiDAR range noise. Each recording is the Phase 17
+reference drive, so its live metrics match that table. Replaying the source
+filter with the same seed reproduced filter position RMS, maximum position
+error and heading RMS exactly on every seed: the largest absolute difference
+was `0.0`. That checks that the saved wheel commands, scans and true poses are
+sufficient to reconstruct the scored run.
+
+| Seed | Steps | Duration (s) | Collisions | Live filter RMS (m) |
+|---:|---:|---:|---:|---:|
+| 0 | 402 | 20.10 | 1 | 1.011 |
+| 1 | 388 | 19.40 | 1 | 1.094 |
+| 2 | 439 | 21.95 | 1 | 0.727 |
+| 3 | 410 | 20.50 | 1 | 0.923 |
+| 4 | 404 | 20.20 | 1 | 0.977 |
+
+The 30 replays used one recording per seed. Paired changes compare a setting
+with the source replay for the same seed.
+
+| Selector | Scale | Replayed position RMS (m), mean ± SD | Heading RMS (°), mean ± SD | Paired RMS change vs source (m), mean ± SD | Seeds improved |
+|---|---:|---:|---:|---:|---:|
+| Scan order | 0.2 | 0.946 ± 0.137 | 17.50 ± 1.70 | reference | 0/5 |
+| Scan order | 0.8 | 1.249 ± 0.359 | 19.82 ± 3.72 | +0.303 ± 0.406 | 1/5 |
+| Scan order | 6.0 | 1.007 ± 0.267 | 16.26 ± 3.29 | +0.060 ± 0.324 | 2/5 |
+| Widest pair | 0.2 | 0.665 ± 0.271 | 13.11 ± 5.45 | −0.282 ± 0.339 | 4/5 |
+| Widest pair | 0.8 | 0.134 ± 0.021 | 2.79 ± 0.25 | −0.813 ± 0.121 | 5/5 |
+| Widest pair | 6.0 | 0.109 ± 0.023 | 2.24 ± 0.21 | −0.837 ± 0.120 | 5/5 |
+
+On identical inputs the widest pair at scale 6.0 still had the lowest mean
+replayed RMS: `0.109` against `0.946 m` for the source, a paired change of
+`−0.837 ± 0.120 m` ranging from `−0.980` to `−0.650 m`. Even at the reference
+scale the widest pair lowered RMS on four of five seeds (`0.665` mean, paired
+`−0.282 ± 0.339 m`); seed 2 rose by `0.065 m`. Changing the scale with
+scan-order selection had no consistent direction, improving on only one of
+five and two of five seeds, respectively. The Phase 17 localization gain
+therefore survives the removal of route divergence.
+
+Live and replayed RMS still differ where the live filter steered a different
+route. For example, the live widest-pair run at scale 0.2 scored `0.925 m`,
+but replaying that filter on the source trajectory scored `0.665 m`. The
+replay isolates estimation; it says nothing about navigation success. All five
+recordings collided after 19.4–22.0 s and ended 14.9–15.5 m from the goal, so
+the shared horizon is a failed drive rather than a completed route.
+
+This comparison covers one route, one recording selector and six settings at a
+two-return budget. Replayed filter metrics are measured against the recorded
+true poses; because the replayed estimate does not influence motion, the study
+cannot test whether a filter would reach the goal. The exact reference match
+is a determinism check for this simulation, not an independent measurement.
+
+[Recorded configurations, per-seed replays and paired differences](../experiments/studies/replay_localization.json).
+Reproduce the five recordings, 30 replays and plot from the saved JSON:
+
+```bash
+python scripts/replay_localization_study.py run --seeds 0 1 2 3 4 --output experiments/studies/replay_localization.json
+MPLBACKEND=Agg python scripts/replay_localization_study.py plot experiments/studies/replay_localization.json --output experiments/plots/replay_localization.png
+```
+
 ### 5.1 Controlled comparisons
 
 | Experiment | Comparison | Question |

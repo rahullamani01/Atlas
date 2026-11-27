@@ -25,6 +25,7 @@ project in Python (motion model, planning, control, sensing, localization).
 | 15 | Localization with fewer LiDAR returns per filter update | complete |
 | 16 | Two-return localization: scan order vs widest angular separation | complete |
 | 17 | Two-return likelihood weighting and true arrival distance | complete |
+| 18 | Replay-controlled comparison of filter settings | complete |
 
 Phase 17 tested whether giving two LiDAR returns more weight could recover
 navigation. With the widest pair, increasing the likelihood scale from 0.2
@@ -32,6 +33,15 @@ to 6.0 lowered mean position RMS from 0.925 m to 0.128 m. Four of five
 drives still collided; the fifth reported arrival 0.218 m from the goal,
 outside the controller's 0.10 m tolerance when scored against truth.
 [Results and reproduction commands](docs/roadmap.md#phase-17--weighting-two-returns).
+
+Phase 18 replayed one recorded drive through every filter setting, so each saw
+identical wheel commands, LiDAR scans and scoring horizon. The reference filter
+reproduced its live score exactly on all five seeds. On shared data, the widest
+pair at scale 6.0 still held **0.109 m mean position RMS** versus **0.946 m**
+for scan order, confirming that Phase 17's localization gain was not an
+artifact of different trajectories. Replay measures estimation only; all five
+recorded drives had already collided.
+[Results and reproduction commands](docs/roadmap.md#phase-18--replaying-one-drive-through-every-filter).
 
 Phase 16 tested one explanation for Phase 15's collisions: the first and last
 valid returns in a circular scan can point in nearly the same direction.
